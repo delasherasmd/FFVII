@@ -78,6 +78,34 @@ restore_gov() {
 }
 trap restore_gov EXIT
 
+# ---- BIOS: optional for PCSX-ReARMed (has a built-in one), required by the rest ----
+BIOS=""
+find_bios() {
+	local cfg sysdir d f found dirs=()
+	for cfg in /home/ark/.config/retroarch/retroarch.cfg /home/ark/.config/retroarch32/retroarch.cfg \
+		/storage/.config/retroarch/retroarch.cfg "$HOME/.config/retroarch/retroarch.cfg"; do
+		[ -f "$cfg" ] || continue
+		sysdir=$(sed -n 's/^[[:space:]]*system_directory[[:space:]]*=[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}.*/\1/p' "$cfg" | head -n 1)
+		# "~" in that file is the home of the user the config belongs to
+		sysdir="${sysdir/#\~/${cfg%%/.config/*}}"
+		[ -n "$sysdir" ] && [ "$sysdir" != default ] && dirs+=("$sysdir")
+	done
+	dirs+=(/roms/bios /roms2/bios /storage/roms/bios "$HOME/.config/retroarch/system")
+	for d in "${dirs[@]}"; do
+		[ -d "$d" ] || continue
+		for f in scph5501.bin scph1001.bin scph7001.bin scph101.bin scph5500.bin scph5502.bin \
+			scph7003.bin scph7502.bin psxonpsp660.bin ps1_rom.bin; do
+			found=$(find "$d" -maxdepth 1 -iname "$f" 2>/dev/null | head -n 1)
+			if [ -n "$found" ]; then
+				BIOS="$found"
+				return 0
+			fi
+		done
+	done
+	return 1
+}
+find_bios
+
 # ---- find RetroArch and a PlayStation core ----
 elf_bits() {
 	case "$(od -An -tu1 -j4 -N1 "$1" 2>/dev/null | tr -d ' ')" in
@@ -86,45 +114,73 @@ elf_bits() {
 	esac
 }
 
+PAIRS64=(
+	"/usr/local/bin/retroarch|/home/ark/.config/retroarch/cores"
+	"/opt/retroarch/bin/retroarch|/home/ark/.config/retroarch/cores"
+	"/usr/bin/retroarch|/tmp/cores"
+	"/usr/bin/retroarch|/usr/lib/libretro"
+	"/usr/bin/retroarch|/usr/lib/aarch64-linux-gnu/libretro"
+	"/usr/bin/retroarch|$HOME/.config/retroarch/cores"
+)
+PAIRS32=(
+	"/usr/local/bin/retroarch32|/home/ark/.config/retroarch32/cores"
+	"/opt/retroarch/bin/retroarch32|/home/ark/.config/retroarch32/cores"
+	"/usr/bin/retroarch32|/usr/lib32/libretro"
+)
+
+# for the log only: every RetroArch and PS1 core on the system
+log_emulators() {
+	local pair f
+	for pair in "${PAIRS64[@]}" "${PAIRS32[@]}"; do
+		[ -x "${pair%%|*}" ] || continue
+		for f in "${pair#*|}"/pcsx* "${pair#*|}"/swanstation* "${pair#*|}"/duckstation* "${pair#*|}"/mednafen_psx*; do
+			[ -f "$f" ] && echo "  disponible: ${pair%%|*} + $(basename "$f") ($(elf_bits "$f") bits)" >>"$LOG"
+		done
+	done
+}
+
+# $1 = 1 to also accept cores that need a real BIOS
 find_emulator() {
-	local order pair ra dir core c bits
-	local pairs64=(
-		"/usr/local/bin/retroarch|/home/ark/.config/retroarch/cores"
-		"/opt/retroarch/bin/retroarch|/home/ark/.config/retroarch/cores"
-		"/usr/bin/retroarch|/tmp/cores"
-		"/usr/bin/retroarch|/usr/lib/libretro"
-		"/usr/bin/retroarch|/usr/lib/aarch64-linux-gnu/libretro"
-		"/usr/bin/retroarch|$HOME/.config/retroarch/cores"
-	)
-	local pairs32=(
-		"/usr/local/bin/retroarch32|/home/ark/.config/retroarch32/cores"
-		"/opt/retroarch/bin/retroarch32|/home/ark/.config/retroarch32/cores"
-		"/usr/bin/retroarch32|/usr/lib32/libretro"
-	)
+	local order bits pat pair ra core
+	local pats=("pcsx_rearmed*_libretro.so")
+	[ "$1" = 1 ] && pats+=(swanstation_libretro.so duckstation_libretro.so mednafen_psx_libretro.so)
 	if [ "$PREFER_RA" = 32 ]; then order="32 64"; else order="64 32"; fi
-	for bits in $order; do
-		if [ "$bits" = 64 ]; then set -- "${pairs64[@]}"; else set -- "${pairs32[@]}"; fi
-		for pair in "$@"; do
-			ra="${pair%%|*}"
-			dir="${pair#*|}"
-			[ -x "$ra" ] && [ -d "$dir" ] || continue
-			for c in pcsx_rearmed_libretro.so pcsx_rearmed_rumble_libretro.so \
-				swanstation_libretro.so duckstation_libretro.so mednafen_psx_libretro.so; do
-				core="$dir/$c"
-				[ -f "$core" ] || continue
-				[ "$(elf_bits "$core")" = "$bits" ] || continue
-				RA="$ra"
-				CORE="$core"
-				return 0
+	# PCSX-ReARMed in any RetroArch first: it is the fastest on these consoles
+	# (ArkOS ships it for the 32-bit RetroArch only)
+	for pat in "${pats[@]}"; do
+		for bits in $order; do
+			if [ "$bits" = 64 ]; then set -- "${PAIRS64[@]}"; else set -- "${PAIRS32[@]}"; fi
+			for pair in "$@"; do
+				ra="${pair%%|*}"
+				[ -x "$ra" ] || continue
+				# shellcheck disable=SC2086 # $pat is a glob
+				for core in "${pair#*|}"/$pat; do
+					[ -f "$core" ] && [ "$(elf_bits "$core")" = "$bits" ] || continue
+					RA="$ra"
+					CORE="$core"
+					return 0
+				done
 			done
 		done
 	done
 	return 1
 }
 
-if ! find_emulator; then
-	msg "No se encontro RetroArch con un nucleo de PlayStation"
-	msg "(pcsx_rearmed). Instala/actualiza el nucleo desde el sistema."
+log_emulators
+if [ -n "$BIOS" ]; then
+	find_emulator 1
+else
+	find_emulator 0
+fi
+if [ -z "$CORE" ]; then
+	if [ -z "$BIOS" ] && find_emulator 1; then
+		msg "Esta consola no tiene PCSX-ReARMed; solo $(basename "$CORE" _libretro.so),"
+		msg "que necesita la BIOS de PlayStation. Copia scph5501.bin o"
+		msg "scph1001.bin en la carpeta bios de la tarjeta SD."
+	else
+		msg "No se encontro RetroArch con un nucleo de PlayStation"
+		msg "(pcsx_rearmed). Instala/actualiza el nucleo desde el sistema."
+	fi
 	pause_exit
 fi
 
@@ -141,33 +197,13 @@ case "$RA" in
 esac
 msg "Emulador: $RA"
 msg "Nucleo:   $(basename "$CORE")"
-
-# ---- BIOS (recommended, not required) ----
-check_bios() {
-	local cfg sysdir d f
-	cfg="${RACONF[1]}"
-	[ -z "$cfg" ] && for f in /home/ark/.config/retroarch/retroarch.cfg "$HOME/.config/retroarch/retroarch.cfg"; do
-		[ -f "$f" ] && cfg="$f" && break
-	done
-	if [ -n "$cfg" ]; then
-		sysdir=$(sed -n 's/^[[:space:]]*system_directory[[:space:]]*=[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}.*/\1/p' "$cfg" | head -n 1)
-		sysdir="${sysdir/#\~/$HOME}"
-	fi
-	for d in "$sysdir" /roms/bios /roms2/bios /storage/roms/bios "$HOME/.config/retroarch/system"; do
-		[ -n "$d" ] && [ -d "$d" ] || continue
-		for f in scph5501.bin scph1001.bin scph7001.bin scph101.bin scph5500.bin scph5502.bin \
-			scph7003.bin scph7502.bin psxonpsp660.bin ps1_rom.bin; do
-			if [ -n "$(find "$d" -maxdepth 1 -iname "$f" 2>/dev/null | head -n 1)" ]; then
-				msg "BIOS:     $d/$f"
-				return 0
-			fi
-		done
-	done
-	msg "BIOS:     no encontrada; se usa la BIOS interna (HLE)."
+if [ -n "$BIOS" ]; then
+	msg "BIOS:     $BIOS"
+else
+	msg "BIOS:     no encontrada; se usa la BIOS interna de PCSX-ReARMed."
 	msg "          Recomendado: scph1001.bin o scph5501.bin en la carpeta bios."
-	return 1
-}
-check_bios || sleep 3
+	sleep 3
+fi
 
 # ---- pick (or build) the game file ----
 shopt -s nullglob nocaseglob
@@ -270,5 +306,5 @@ shopt -u nullglob nocaseglob
 msg ""
 msg "Iniciando: $(basename "$GAME")"
 cd "$GAMEDIR" || exit 1
-"$RA" "${RACONF[@]}" -L "$CORE" "$GAME" >>"$LOG" 2>&1
+"$RA" "${RACONF[@]}" --verbose -L "$CORE" "$GAME" >>"$LOG" 2>&1
 clear_screen

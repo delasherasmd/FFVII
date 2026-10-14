@@ -126,6 +126,13 @@ desde el menú de PlayStation, como cualquier juego.
   viene con un `.cue`).
 - **"No se encontró RetroArch con un núcleo de PlayStation"**: falta el
   núcleo `pcsx_rearmed`. Actualizá el sistema de la consola.
+- **"necesita la BIOS de PlayStation"**: tu consola no tiene PCSX-ReARMed
+  (el único emulador de PS1 que trae su propia BIOS), así que hace falta
+  una BIOS real: `scph5501.bin` o `scph1001.bin` en la carpeta `bios` de
+  la SD (en ArkOS: `EASYROMS/bios`).
+- **El juego no arranca y vuelve al menú**: mandá el archivo
+  `ports/finalfantasy7/log.txt`. Ahí queda qué emulador se usó, cuáles hay
+  en la consola y los mensajes de RetroArch.
 - **No aparece en Ports**: reiniciá la consola o actualizá la lista de
   juegos.
 - **Volver a armar el `.pbp`**: borrá `ports/finalfantasy7/Final Fantasy VII.pbp`
