@@ -74,17 +74,25 @@ vez.
 
 ## Cambiar de disco
 
+Juntar los discos en un solo archivo **no elimina el cambio de disco**: es
+el propio juego el que, al final del disco 1, se para y pide "inserte el
+disco 2". Lo que cambia es que no hay que buscar otro archivo, porque los 3
+discos ya están adentro del `.pbp`. Es como tener los 3 CDs en una misma
+caja: solo elegís el número.
+
 Cuando el juego pida el disco 2 (o el 3):
 
 1. Abrí el menú de RetroArch (en ArkOS: **SELECT + X**).
-2. **Control de discos** (*Disc Control*) → **Expulsar disco**
-   (*Eject Disc*).
-3. **Índice del disco actual** (*Current Disc Index*) → elegí el **2**
-   (o el 3).
-4. **Insertar disco** (*Insert Disc*) y volvé al juego.
+2. **Control de discos** (*Disc Control*) → **Índice del disco actual**
+   (*Current Disc Index*) → elegí el **2** (o el 3).
+3. Volvé al juego. RetroArch saca el disco viejo y pone el nuevo solo.
 
-No hay otro archivo que buscar: los 3 discos están dentro del `.pbp`.
-RetroArch se acuerda en qué disco quedaste para la próxima vez.
+Si tu RetroArch es muy viejo y no te deja cambiar el número, hacelo a mano:
+primero **Expulsar disco**, después el número, después **Insertar disco**.
+
+RetroArch se acuerda en qué disco quedaste: la próxima vez que abras el
+juego arranca con ese disco puesto, así cargás la partida sin volver a
+cambiarlo.
 
 ## Partidas guardadas
 
