@@ -1,0 +1,17 @@
+# Imagenes de disco y BIOS: nunca subirlas (el repositorio es publico)
+*.bin
+*.cue
+*.img
+*.iso
+*.chd
+*.pbp
+*.m3u
+*.ecm
+*.ccd
+*.sub
+*.srm
+
+# Generados
+build/
+log.txt
+*.tmp

@@ -1,0 +1,14 @@
+Copia aca los 3 discos de Final Fantasy VII (PlayStation):
+
+  - los 3 archivos .bin  (alcanza con los .bin)
+  - o los .cue con sus .bin
+
+Los nombres no importan: el orden de los discos se saca del codigo de
+cada disco (SCUS-94163, -94164, -94165 / SCES-...).
+
+La primera vez que abras "Final Fantasy VII" desde Ports se juntan en
+un solo archivo:  ports/finalfantasy7/Final Fantasy VII.pbp
+Cuando el juego ya arranca, podes borrar los .bin/.cue de esta carpeta.
+
+Si ya tenes el .pbp hecho en la PC, ponelo directamente en
+ports/finalfantasy7/ (no hace falta copiar los .bin).
