@@ -47,6 +47,11 @@ msg() {
 	fi
 }
 
+# details that only go to the log (the normal launch shows nothing)
+note() {
+	echo "$*" >>"$LOG"
+}
+
 clear_screen() {
 	[ -n "$TTY" ] && printf "\033c" >"$TTY"
 }
@@ -62,7 +67,7 @@ pause_exit() {
 mkdir -p "$DISCDIR"
 : >"$LOG"
 clear_screen
-msg "== $TITLE =="
+note "== $TITLE =="
 
 # ---- CPU at full speed while packing and playing ----
 GOV_SAVE=()
@@ -195,15 +200,9 @@ case "$RA" in
 	done
 	;;
 esac
-msg "Emulador: $RA"
-msg "Nucleo:   $(basename "$CORE")"
-if [ -n "$BIOS" ]; then
-	msg "BIOS:     $BIOS"
-else
-	msg "BIOS:     no encontrada; se usa la BIOS interna de PCSX-ReARMed."
-	msg "          Recomendado: scph1001.bin o scph5501.bin en la carpeta bios."
-	sleep 3
-fi
+note "Emulador: $RA"
+note "Nucleo:   $(basename "$CORE")"
+note "BIOS:     ${BIOS:-no encontrada (se usa la interna de PCSX-ReARMed)}"
 
 # ---- pick (or build) the game file ----
 shopt -s nullglob nocaseglob
@@ -270,6 +269,7 @@ pack_discs() {
 		chmod +x "$tool" 2>/dev/null
 	fi
 
+	msg "== $TITLE =="
 	msg ""
 	msg "Primera vez: juntando los discos en un solo archivo."
 	msg "Tarda unos minutos, no apagues la consola."
@@ -303,8 +303,7 @@ GAME=""
 find_game || pack_discs
 shopt -u nullglob nocaseglob
 
-msg ""
-msg "Iniciando: $(basename "$GAME")"
+note "Iniciando: $(basename "$GAME")"
 cd "$GAMEDIR" || exit 1
 "$RA" "${RACONF[@]}" --verbose -L "$CORE" "$GAME" >>"$LOG" 2>&1
 clear_screen
