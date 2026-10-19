@@ -1,0 +1,14 @@
+Imagen de encendido (boot logo) para la R36S: 640x480, BMP de 24 bits
+
+  logo_vapor.bmp      humo/vapor sobre fondo azul noche
+  logo_vaporwave.bmp  estilo vaporwave: sol, grilla neon
+
+Como cambiarla:
+1. Pone la SD en la PC y abri la particion chica llamada BOOT
+   (no la de los juegos, EASYROMS).
+2. Hace una copia del logo.bmp que ya esta ahi (por ejemplo a tu Escritorio).
+3. Elegi una imagen, renombrala a  logo.bmp  (en minusculas) y reemplaza
+   el logo.bmp de la particion BOOT.
+4. No toques ningun otro archivo de BOOT: ahi esta lo que hace arrancar la consola.
+
+Si al encender no se ve la imagen, volve a poner el logo.bmp original.
