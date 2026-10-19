@@ -1,12 +1,12 @@
 Pantallas de carga para ArkOS en la R36S (640x480, JPG de 24 bits)
 
-  loading_vapor.jpg      humo/vapor sobre fondo azul noche
-  loading_vaporwave.jpg  estilo vaporwave: sol, grilla neon
+  vapor/loading.jpg      humo/vapor sobre fondo azul noche
+  vaporwave/loading.jpg  estilo vaporwave: sol, grilla neon
 
 Como usar una:
-1. Elegi una y renombrala a  loading.jpg  (en minusculas).
-2. Copiala en la SD a  EASYROMS/launchimages/loading.jpg
-   (hace antes una copia del loading.jpg que ya esta ahi).
-3. En la consola: START -> UI Settings -> Game Loading Image Mode -> Pic -> Default.
+1. Copia el loading.jpg de la carpeta que elijas (vapor o vaporwave) a
+   EASYROMS/launchimages/ en la SD, reemplazando el que esta
+   (hace antes una copia del original).
+2. En la consola: START -> UI Settings -> Game Loading Image Mode -> Pic -> Default.
 
 Se muestra mientras carga cualquier juego. Necesita ArkOS del 24/05/2024 o posterior.
