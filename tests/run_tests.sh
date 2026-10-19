@@ -21,6 +21,15 @@ python3 -I "$ROOT/tests/make_test_discs.py" "$T/discs"
 cmp "$T/bin.pbp" "$T/cue.pbp"
 python3 -I "$ROOT/tests/check_pbp.py" "$T/cue.pbp" "$T/discs/"*.bin
 
+# a cut-off image must be refused (the game would hang on a black screen)
+cp "$T/discs/Final Fantasy VII (Test) (Disc 3).bin" "$T/cut.bin"
+truncate -s $((200 * 2352)) "$T/cut.bin"
+if "$T/pbpack" -q -o "$T/cut.pbp" "$T/cut.bin" 2>/dev/null; then
+	echo "FAIL: truncated image was packed"
+	exit 1
+fi
+echo "truncated image refused"
+
 if [ -n "${PCSX_CORE:-}" ]; then
 	cc -O1 -o "$T/lrtest" "$ROOT/tests/lrtest.c" -ldl -I"$ROOT/tests"
 	mkdir -p "$T/sys"

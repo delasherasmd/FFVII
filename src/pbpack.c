@@ -419,6 +419,68 @@ static int iso_find_file(disc_t *d, uint32_t dir_lba, uint32_t dir_size, const c
 	return -1;
 }
 
+/*
+ * Walk the ISO9660 tree and return the first sector past the end of the
+ * last file or directory.  An image shorter than that is cut off (or a
+ * trimmed "rip"): the game reads past the end and hangs on a black screen.
+ * Also returns the volume size the disc declares in its PVD.
+ */
+static uint32_t iso_needed_sectors(disc_t *d, uint32_t *vol_size)
+{
+	enum { MAX_DIRS = 4096 };
+	static uint32_t q_lba[MAX_DIRS], q_size[MAX_DIRS];
+	uint8_t raw[SECTOR_RAW];
+	const uint8_t *ud;
+	uint32_t need = 0, n = 0;
+
+	*vol_size = 0;
+	if (read_sector_at(d, 16, raw) != 0)
+		return 0;
+	ud = user_data(raw);
+	if (ud[0] != 1 || memcmp(ud + 1, "CD001", 5) != 0)
+		return 0;
+	*vol_size = get_le32(ud + 80);
+	q_lba[n] = get_le32(ud + 156 + 2);
+	q_size[n++] = get_le32(ud + 156 + 10);
+
+	for (uint32_t i = 0; i < n; i++) {
+		uint32_t nsec = (q_size[i] + 2047) / 2048;
+		if (q_lba[i] + nsec > need)
+			need = q_lba[i] + nsec;
+		for (uint32_t s = 0; s < nsec && s < 256; s++) {
+			uint32_t pos = 0;
+			if (read_sector_at(d, q_lba[i] + s, raw) != 0)
+				break;
+			ud = user_data(raw);
+			while (pos + 34 <= 2048) {
+				uint8_t len = ud[pos], nlen = ud[pos + 32];
+				uint32_t lba, size, end;
+				if (len < 34 || pos + len > 2048 || 33 + nlen > len)
+					break;
+				lba = get_le32(ud + pos + 2);
+				size = get_le32(ud + pos + 10);
+				end = lba + (size + 2047) / 2048;
+				/* "." and ".." are 1-byte names 0x00 / 0x01 */
+				if (!(nlen == 1 && ud[pos + 33] <= 1)) {
+					if (end > need)
+						need = end;
+					if (ud[pos + 25] & 2) {
+						uint32_t k;
+						for (k = 0; k < n && q_lba[k] != lba; k++)
+							;
+						if (k == n && n < MAX_DIRS) {
+							q_lba[n] = lba;
+							q_size[n++] = size;
+						}
+					}
+				}
+				pos += len;
+			}
+		}
+	}
+	return need;
+}
+
 /* "BOOT = cdrom:\SCUS_941.63;1" -> "SCUS94163" */
 static void detect_id(disc_t *d)
 {
@@ -819,6 +881,7 @@ static void usage(void)
 	       "  -n           solo mostrar informacion de los discos, no escribir nada\n"
 	       "  -V           verificar el .pbp al terminar (relee y compara CRC32)\n"
 	       "  -s           ordenar los discos por su codigo (SCUS94163 < SCUS94164 ...)\n"
+	       "  -f           empaquetar aunque un disco este incompleto (no recomendado)\n"
 	       "  -q           silencioso\n\n"
 	       "Entradas: .cue (con sus .bin) o imagenes crudas .bin/.img de 2352 bytes/sector.\n"
 	       "Maximo %d discos.\n", MAX_DISCS);
@@ -827,7 +890,8 @@ static void usage(void)
 int main(int argc, char **argv)
 {
 	const char *outp = NULL, *title = NULL, *id = NULL;
-	int level = 6, threads = 0, dry = 0, do_verify = 0, sort_id = 0, ndiscs = 0;
+	int level = 6, threads = 0, dry = 0, do_verify = 0, sort_id = 0, force = 0, ndiscs = 0;
+	int incomplete = 0;
 	disc_t discs[MAX_DISCS];
 	uint32_t crcs[MAX_DISCS], disc_off[MAX_DISCS];
 	char *tmp, *deftitle = NULL;
@@ -849,6 +913,7 @@ int main(int argc, char **argv)
 			case 'n': dry = 1; break;
 			case 'V': do_verify = 1; break;
 			case 's': sort_id = 1; break;
+			case 'f': force = 1; break;
 			case 'q': quiet = 1; break;
 			case 'h': usage(); return 0;
 			default: usage(); return 1;
@@ -892,10 +957,28 @@ int main(int argc, char **argv)
 		}
 	}
 	for (int i = 0; i < ndiscs; i++) {
+		uint32_t vol, need = iso_needed_sectors(&discs[i], &vol);
 		info("Disco %d: %s\n  ID %s, etiqueta '%s', %u sectores, %d pista(s), %d archivo(s)\n",
 		     i + 1, discs[i].path, discs[i].id[0] ? discs[i].id : "(desconocido)",
 		     discs[i].label, discs[i].sectors, discs[i].ntracks, discs[i].nfiles);
+		if (need > discs[i].sectors) {
+			fprintf(stderr,
+				"%s: el disco %d (%s) esta INCOMPLETO.\n"
+				"  El archivo tiene %u sectores (%u MB) y los datos del disco llegan\n"
+				"  hasta el sector %u (%u MB). El .bin esta cortado o es una version\n"
+				"  recortada: con el, el juego se queda en pantalla negra.\n"
+				"  Hace falta la imagen completa del disco.\n",
+				force ? "AVISO" : "ERROR", i + 1, path_basename(discs[i].path), discs[i].sectors,
+				(unsigned)((uint64_t)discs[i].sectors * SECTOR_RAW >> 20), need,
+				(unsigned)((uint64_t)need * SECTOR_RAW >> 20));
+			incomplete = 1;
+		} else if (vol > discs[i].sectors) {
+			info("  aviso: el disco declara %u sectores y la imagen tiene %u\n", vol,
+			     discs[i].sectors);
+		}
 	}
+	if (incomplete && !force && !dry)
+		die("no se crea el .pbp porque falta parte de los discos (usar -f para forzar)");
 	if (dry)
 		return 0;
 

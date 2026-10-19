@@ -121,6 +121,10 @@ desde el menú de PlayStation, como cualquier juego.
 
 - **"No hay discos todavía"**: los `.bin` no están en
   `ports/finalfantasy7/discos/`.
+- **"el disco N esta INCOMPLETO"** o **pantalla negra después del logo de
+  PlayStation**: el `.bin` está cortado o es una versión recortada (un disco
+  completo de FF7 pesa cerca de 700 MB). Hace falta la imagen completa de
+  cada disco; después borrá el `.pbp` viejo para que se vuelva a armar.
 - **"parece una imagen ISO de 2048 bytes"**: ese archivo no es un ripeo
   completo del disco. Hace falta el `.bin` de 2352 bytes por sector (el que
   viene con un `.cue`).
