@@ -138,7 +138,7 @@ log_emulators() {
 	local pair f
 	for pair in "${PAIRS64[@]}" "${PAIRS32[@]}"; do
 		[ -x "${pair%%|*}" ] || continue
-		for f in "${pair#*|}"/pcsx* "${pair#*|}"/swanstation* "${pair#*|}"/duckstation* "${pair#*|}"/mednafen_psx*; do
+		for f in "${pair#*|}"/pcsx*.so "${pair#*|}"/swanstation*.so "${pair#*|}"/duckstation*.so "${pair#*|}"/mednafen_psx*.so; do
 			[ -f "$f" ] && echo "  disponible: ${pair%%|*} + $(basename "$f") ($(elf_bits "$f") bits)" >>"$LOG"
 		done
 	done
@@ -303,7 +303,48 @@ GAME=""
 find_game || pack_discs
 shopt -u nullglob nocaseglob
 
+# ---- diagnostics for the log ----
+# size and disc ids inside a .pbp (DATA.PSAR offset at 0x24; disc table at +0x200)
+pbp_info() {
+	local f="$1" psar n off
+	note "Archivo:  $(basename "$f"), $(($(stat -c %s "$f" 2>/dev/null || echo 0) / 1048576)) MB"
+	case "$f" in *.pbp | *.PBP) ;; *) return ;; esac
+	psar=$(od -An -tu4 -j36 -N4 "$f" | tr -d ' ')
+	[ -n "$psar" ] || return
+	if [ "$(dd if="$f" bs=1 skip="$psar" count=10 2>/dev/null)" = PSTITLEIMG ]; then
+		for n in 0 1 2 3 4; do
+			off=$(od -An -tu4 -j$((psar + 512 + 4 * n)) -N4 "$f" | tr -d ' ')
+			[ "${off:-0}" -gt 0 ] || break
+			note "  disco $((n + 1)): $(dd if="$f" bs=1 skip=$((psar + off + 1024)) count=11 2>/dev/null | tr -cd 'A-Z0-9_')"
+		done
+	else
+		note "  un solo disco: $(dd if="$f" bs=1 skip=$((psar + 1024)) count=11 2>/dev/null | tr -cd 'A-Z0-9_')"
+	fi
+}
+pbp_info "$GAME"
+# how this console's own menu launches PS1 games, and the RetroArch wrapper
+for cfg in /etc/emulationstation/es_systems.cfg "$HOME/.emulationstation/es_systems.cfg"; do
+	[ -f "$cfg" ] || continue
+	note "PS1 en $cfg:"
+	awk '/<name>psx<\/name>/ {f = 1} f && /<command>/ {print "  " $0; exit}' "$cfg" >>"$LOG"
+done
+if [ "$(head -c 2 "$RA" 2>/dev/null)" = "#!" ]; then
+	note "--- $RA:"
+	head -n 40 "$RA" >>"$LOG"
+	note "---"
+fi
+# RetroArch's own log (its stdout is not always ours); option exists since 1.15
+RALOG=()
+for bin in "$RA" "/opt/retroarch/bin/$(basename "$RA")"; do
+	if [ -f "$bin" ] && grep -aq -- "--log-file" "$bin"; then
+		rm -f "$GAMEDIR/retroarch.log"
+		RALOG=(--log-file "$GAMEDIR/retroarch.log")
+		break
+	fi
+done
+
 note "Iniciando: $(basename "$GAME")"
 cd "$GAMEDIR" || exit 1
-"$RA" "${RACONF[@]}" --verbose -L "$CORE" "$GAME" >>"$LOG" 2>&1
+"$RA" "${RACONF[@]}" --verbose "${RALOG[@]}" -L "$CORE" "$GAME" >>"$LOG" 2>&1
+note "RetroArch termino (codigo $?)"
 clear_screen
