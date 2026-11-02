@@ -48,6 +48,12 @@ En Mac o Linux: `python3 proyectar.py` (para los modos Compatible y Pantalla hac
 
 ---
 
+## Identificar el proyector
+
+`IdentificarProyector.exe` (o `python identificar.py`) revisa la red WiFi de la casa y arma un
+informe con cada equipo y lo que sabe hacer: DLNA, Chromecast, AirPlay, Android con ADB por red,
+Miracast. El informe queda en el escritorio (`informe_proyector.txt`) y copiado en el portapapeles.
+
 ## Si algo no funciona
 
 | Problema | Solución |
