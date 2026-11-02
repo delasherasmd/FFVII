@@ -25,6 +25,7 @@ import argparse
 import codecs
 import collections
 import hashlib
+import itertools
 import json
 import logging
 import mimetypes
@@ -34,6 +35,8 @@ import re
 import select
 import shutil
 import socket
+import ssl
+import struct
 import subprocess
 import sys
 import tempfile
@@ -70,13 +73,18 @@ class ProyectarError(Exception):
     """Error con un mensaje pensado para mostrarle al usuario."""
 
 
-NOT_FOUND_HELP = """No encontré ningún proyector en la red.
+NOT_FOUND_HELP = """No encontré el proyector en la red (busqué DLNA y Chromecast).
 
 • Verifica que el proyector esté encendido y conectado a la MISMA red WiFi que la PC.
-• En el proyector abre la app de «Screen Mirroring», «EShare», «DLNA» o «Media Renderer»
-  (algunos sólo reciben videos con esa app abierta).
-• Si conoces la IP del proyector (aparece en su menú de red), usa «Por IP…» o --proyector IP.
-• En Windows, permite a Python en el Firewall (redes privadas y públicas)."""
+• En el proyector abre la app de «Screen Mirroring», «EShare», «DLNA», «Cast» o similar
+  (algunos sólo reciben videos con esa app abierta) y vuelve a buscar.
+• Si conoces la IP del proyector (aparece en su menú de red), usa «Por IP…».
+• En Windows, permite a Python en el Firewall (redes privadas y públicas).
+
+Igual hay dos caminos que funcionan con casi cualquier proyector:
+• «Navegador del proyector» (en la lista): abres una dirección en el navegador
+  del proyector y lo manejas desde la PC.
+• Pestaña «Pantalla de la PC» → «Miracast (Win + K)»."""
 
 FFMPEG_HELP = """Para este modo hace falta ffmpeg.
 
@@ -347,13 +355,40 @@ class Renderer:
     def host(self) -> str:
         return urllib.parse.urlsplit(self.location).hostname or ""
 
+    kind = "DLNA"
+    live_format = "ts"  # formato para videos convertidos en vivo
+
     @property
     def label(self) -> str:
-        return f"{self.name}  ({self.host})"
+        return f"{self.name}  —  {self.kind} ({self.host})"
 
     @property
     def key(self) -> str:
         return self.udn or self.location
+
+    def prefers_compatible(self, path: str) -> bool:
+        return False  # los proyectores DLNA suelen abrir casi cualquier formato
+
+    def load(self, url: str, mime: str, title: str, live: bool, features: str,
+             duration: Optional[float] = None, size: Optional[int] = None,
+             sub_url: Optional[str] = None, sub_mime: str = "text/srt") -> None:
+        meta = didl_metadata(title, url, mime, features, duration=duration, size=size,
+                             sub_url=sub_url, sub_mime=sub_mime)
+        self.set_uri(url, meta)
+        error = None
+        for _ in range(4):
+            try:
+                self.play()
+                return
+            except DLNAError as e:  # algunos todavía están cargando: reintentamos
+                error = e
+                time.sleep(0.8)
+        try:
+            if self.transport_state() in ("PLAYING", "TRANSITIONING"):
+                return  # empezó solo
+        except DLNAError:
+            pass
+        raise error
 
     # --- acciones ---
     def avt(self, action: str, _timeout: float = 8.0, **args) -> Dict[str, str]:
@@ -432,7 +467,7 @@ def load_renderer(location: str, timeout: float = 4.0) -> Optional[Renderer]:
     return None
 
 
-def discover(timeout: float = 3.0, hosts: Optional[List[str]] = None) -> List[Renderer]:
+def discover_dlna(timeout: float = 3.0, hosts: Optional[List[str]] = None) -> List[Renderer]:
     """Busca proyectores/TVs DLNA en la red local."""
     locations = ssdp_search(timeout, hosts)
     found: Dict[str, Renderer] = {}
@@ -453,9 +488,7 @@ def discover(timeout: float = 3.0, hosts: Optional[List[str]] = None) -> List[Re
         t.start()
     for t in threads:
         t.join(6)
-    result = sorted(found.values(), key=lambda r: r.name.lower())
-    log.info("Proyectores encontrados: %s", ", ".join(r.label for r in result) or "ninguno")
-    return result
+    return sorted(found.values(), key=lambda r: r.name.lower())
 
 
 def didl_metadata(title: str, url: str, mime: str, features: str, duration: Optional[float] = None,
@@ -484,6 +517,520 @@ def didl_metadata(title: str, url: str, mime: str, features: str, duration: Opti
         'xmlns:sec="http://www.sec.co.kr/">'
         f'<item id="0" parentID="-1" restricted="1">{"".join(item)}</item></DIDL-Lite>'
     )
+
+
+# ---------------------------------------------------------------------------
+# Chromecast / Google Cast (búsqueda por mDNS y protocolo Cast v2)
+# ---------------------------------------------------------------------------
+
+MDNS_ADDR = ("224.0.0.251", 5353)
+CAST_SERVICE = "_googlecast._tcp.local"
+CAST_NS_CONN = "urn:x-cast:com.google.cast.tp.connection"
+CAST_NS_HEARTBEAT = "urn:x-cast:com.google.cast.tp.heartbeat"
+CAST_NS_RECEIVER = "urn:x-cast:com.google.cast.receiver"
+CAST_NS_MEDIA = "urn:x-cast:com.google.cast.media"
+CAST_MEDIA_APP = "CC1AD845"  # reproductor estándar de Google
+
+
+def _dns_name(name: str) -> bytes:
+    out = b""
+    for part in name.strip(".").split("."):
+        b = part.encode("utf-8")
+        out += bytes([len(b)]) + b
+    return out + b"\x00"
+
+
+def mdns_query_packet(service: str) -> bytes:
+    # una pregunta PTR, pidiendo respuesta directa (unicast) a nuestro puerto
+    return struct.pack(">6H", 0, 0, 1, 0, 0, 0) + _dns_name(service) + struct.pack(">HH", 12, 0x8001)
+
+
+def _read_dns_name(data: bytes, off: int) -> Tuple[str, int]:
+    labels, end, hops = [], None, 0
+    while True:
+        n = data[off]
+        if n == 0:
+            off += 1
+            break
+        if n & 0xC0 == 0xC0:  # puntero (compresión de nombres)
+            if end is None:
+                end = off + 2
+            off = ((n & 0x3F) << 8) | data[off + 1]
+            hops += 1
+            if hops > 30:
+                raise ValueError("nombre DNS en bucle")
+            continue
+        labels.append(data[off + 1:off + 1 + n].decode("utf-8", "replace"))
+        off += 1 + n
+    return ".".join(labels), (end if end is not None else off)
+
+
+def parse_mdns(data: bytes) -> List[Tuple[str, int, object]]:
+    """Registros de una respuesta mDNS: (nombre, tipo, valor) para PTR, SRV, TXT y A."""
+    qd, an, ns, ar = struct.unpack(">4H", data[4:12])
+    off = 12
+    for _ in range(qd):
+        _, off = _read_dns_name(data, off)
+        off += 4
+    records = []
+    for _ in range(an + ns + ar):
+        name, off = _read_dns_name(data, off)
+        rtype, _, _, rdlen = struct.unpack(">HHIH", data[off:off + 10])
+        off += 10
+        start, rd = off, data[off:off + rdlen]
+        off += rdlen
+        if rtype == 12:
+            value: object = _read_dns_name(data, start)[0]
+        elif rtype == 33:
+            value = (struct.unpack(">H", rd[4:6])[0], _read_dns_name(data, start + 6)[0])
+        elif rtype == 16:
+            txt, i = {}, 0
+            while i < len(rd):
+                item = rd[i + 1:i + 1 + rd[i]].decode("utf-8", "replace")
+                i += 1 + rd[i]
+                k, _, v = item.partition("=")
+                txt[k.lower()] = v
+            value = txt
+        elif rtype == 1 and rdlen == 4:
+            value = socket.inet_ntoa(rd)
+        else:
+            continue
+        records.append((name, rtype, value))
+    return records
+
+
+def mdns_browse(service: str = CAST_SERVICE, timeout: float = 2.5,
+                hosts: Optional[List[str]] = None) -> List[dict]:
+    """Busca servicios mDNS (por ejemplo Chromecast). Devuelve [{name, host, port, txt}]."""
+    socks: List[Tuple[socket.socket, Tuple[str, int]]] = []
+    if hosts:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.bind(("", 0))
+        socks += [(s, (h, 5353)) for h in hosts]
+    else:
+        for ip in local_ipv4s() or ["0.0.0.0"]:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+            try:
+                s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 255)
+                if ip != "0.0.0.0":
+                    s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(ip))
+                s.bind((ip, 0))
+            except OSError:
+                s.close()
+                continue
+            socks.append((s, MDNS_ADDR))
+    query = mdns_query_packet(service)
+    unique = list({id(s): s for s, _ in socks}.values())
+    ptr: Dict[str, str] = {}
+    srv: Dict[str, Tuple[int, str]] = {}
+    txt: Dict[str, dict] = {}
+    addr_of: Dict[str, str] = {}
+    source: Dict[str, str] = {}
+
+    def send_all():
+        for s, dest in socks:
+            try:
+                s.sendto(query, dest)
+            except OSError:
+                pass
+    start, resent = time.monotonic(), False
+    send_all()
+    try:
+        while unique:
+            now = time.monotonic()
+            if not resent and now - start > 0.8:
+                send_all()
+                resent = True
+            remaining = start + timeout - now
+            if remaining <= 0:
+                break
+            ready, _, _ = select.select(unique, [], [], min(remaining, 0.25))
+            for s in ready:
+                try:
+                    data, addr = s.recvfrom(9000)
+                    records = parse_mdns(data)
+                except (OSError, ValueError, IndexError, struct.error):
+                    continue
+                for name, rtype, value in records:
+                    key = name.lower()
+                    if rtype == 12 and key == service.lower():
+                        ptr[str(value).lower()] = str(value)
+                        source.setdefault(str(value).lower(), addr[0])
+                    elif rtype == 33:
+                        srv[key] = value  # type: ignore[assignment]
+                    elif rtype == 16:
+                        txt[key] = value  # type: ignore[assignment]
+                    elif rtype == 1:
+                        addr_of[key] = str(value)
+    finally:
+        for s in unique:
+            s.close()
+    out = []
+    for key, instance in ptr.items():
+        port, target = srv.get(key, (8009, ""))
+        out.append({"name": instance, "host": addr_of.get(target.lower()) or source.get(key),
+                    "port": port, "txt": txt.get(key, {})})
+    return out
+
+
+def _pb_varint(n: int) -> bytes:
+    out = b""
+    while True:
+        byte = n & 0x7F
+        n >>= 7
+        if n:
+            out += bytes([byte | 0x80])
+        else:
+            return out + bytes([byte])
+
+
+def cast_encode(source: str, dest: str, namespace: str, payload: str) -> bytes:
+    """Mensaje Cast (protobuf CastMessage) con su largo adelante."""
+    def text(field_no, value):
+        b = value.encode("utf-8")
+        return _pb_varint(field_no << 3 | 2) + _pb_varint(len(b)) + b
+    msg = b"\x08\x00" + text(2, source) + text(3, dest) + text(4, namespace) + b"\x28\x00" + text(6, payload)
+    return struct.pack(">I", len(msg)) + msg
+
+
+def cast_decode(data: bytes) -> Dict[str, object]:
+    fields: Dict[int, object] = {}
+    i = 0
+    while i < len(data):
+        key, shift = 0, 0
+        while True:
+            b = data[i]
+            i += 1
+            key |= (b & 0x7F) << shift
+            shift += 7
+            if not b & 0x80:
+                break
+        num, wire = key >> 3, key & 7
+        if wire == 0:
+            val, shift = 0, 0
+            while True:
+                b = data[i]
+                i += 1
+                val |= (b & 0x7F) << shift
+                shift += 7
+                if not b & 0x80:
+                    break
+            fields[num] = val
+        elif wire == 2:
+            n, shift = 0, 0
+            while True:
+                b = data[i]
+                i += 1
+                n |= (b & 0x7F) << shift
+                shift += 7
+                if not b & 0x80:
+                    break
+            fields[num] = data[i:i + n]
+            i += n
+        elif wire == 1:
+            i += 8
+        elif wire == 5:
+            i += 4
+        else:
+            raise ValueError("mensaje Cast inválido")
+
+    def s(n):
+        v = fields.get(n, b"")
+        return v.decode("utf-8", "replace") if isinstance(v, bytes) else str(v)
+    return {"source": s(2), "dest": s(3), "ns": s(4), "payload": s(6)}
+
+
+class CastConnection:
+    """Conexión cifrada con un Chromecast (puerto 8009)."""
+
+    def __init__(self, host: str, port: int = 8009, timeout: float = 6.0):
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE  # los Chromecast usan certificados propios
+        try:
+            raw = socket.create_connection((host, port), timeout=timeout)
+            self.sock = ctx.wrap_socket(raw)
+        except (OSError, ssl.SSLError) as e:
+            raise ProyectarError(f"No pude conectar con el Chromecast ({host}): {e}") from None
+        self.sock.settimeout(None)
+        self.closed = False
+        self.receiver: dict = {}
+        self._ids = itertools.count(1)
+        self._waiters: Dict[int, list] = {}
+        self._send_lock = threading.Lock()
+        threading.Thread(target=self._reader, daemon=True, name="cast-rx").start()
+        threading.Thread(target=self._heartbeat, daemon=True, name="cast-ping").start()
+        self.send(CAST_NS_CONN, {"type": "CONNECT"})
+
+    def send(self, ns: str, obj: dict, dest: str = "receiver-0") -> None:
+        data = cast_encode("sender-0", dest, ns, json.dumps(obj))
+        with self._send_lock:
+            try:
+                self.sock.sendall(data)
+            except OSError as e:
+                self.closed = True
+                raise ProyectarError(f"Se cortó la conexión con el Chromecast: {e}") from None
+
+    def request(self, ns: str, obj: dict, dest: str = "receiver-0", timeout: float = 10.0) -> dict:
+        rid = next(self._ids)
+        waiter: list = [threading.Event(), None]
+        self._waiters[rid] = waiter
+        self.send(ns, dict(obj, requestId=rid), dest)
+        if not waiter[0].wait(timeout) or waiter[1] is None:
+            self._waiters.pop(rid, None)
+            raise ProyectarError(f"El Chromecast no respondió a «{obj.get('type')}».")
+        return waiter[1]
+
+    def _reader(self):
+        buf = b""
+        try:
+            while True:
+                chunk = self.sock.recv(65536)
+                if not chunk:
+                    break
+                buf += chunk
+                while len(buf) >= 4:
+                    n = struct.unpack(">I", buf[:4])[0]
+                    if len(buf) < 4 + n:
+                        break
+                    msg, buf = cast_decode(buf[4:4 + n]), buf[4 + n:]
+                    self._handle(msg)
+        except (OSError, ValueError, IndexError):
+            pass
+        finally:
+            self.closed = True
+            for w in list(self._waiters.values()):
+                w[0].set()
+
+    def _handle(self, msg: dict):
+        try:
+            payload = json.loads(msg.get("payload") or "{}")
+        except ValueError:
+            return
+        kind = payload.get("type")
+        if msg.get("ns") == CAST_NS_HEARTBEAT and kind == "PING":
+            try:
+                self.send(CAST_NS_HEARTBEAT, {"type": "PONG"}, msg.get("source") or "receiver-0")
+            except ProyectarError:
+                pass
+            return
+        if kind == "RECEIVER_STATUS":
+            self.receiver = payload.get("status") or {}
+        waiter = self._waiters.pop(payload.get("requestId") or 0, None)
+        if waiter:
+            waiter[1] = payload
+            waiter[0].set()
+
+    def _heartbeat(self):
+        while not self.closed:
+            time.sleep(5)
+            try:
+                self.send(CAST_NS_HEARTBEAT, {"type": "PING"})
+            except ProyectarError:
+                return
+
+    def close(self):
+        try:
+            self.send(CAST_NS_CONN, {"type": "CLOSE"})
+        except ProyectarError:
+            pass
+        self.closed = True
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+
+
+class CastRenderer:
+    """Proyector o TV con Chromecast / Google Cast integrado."""
+    kind = "Chromecast"
+    live_format = "mp4"
+
+    def __init__(self, name: str, host: str, port: int = 8009, model: str = "", udn: str = ""):
+        self.name, self.host, self.port, self.model, self.udn = name, host, int(port), model, udn
+        self.manufacturer = ""
+        self.location = f"cast://{host}:{port}"
+        self._conn: Optional[CastConnection] = None
+        self._transport: Optional[str] = None
+        self._session: Optional[int] = None
+        self._last: Optional[dict] = None
+        self._last_at = 0.0
+        self._lock = threading.RLock()
+
+    @property
+    def label(self) -> str:
+        return f"{self.name}  —  {self.kind} ({self.host})"
+
+    @property
+    def key(self) -> str:
+        return self.udn or self.location
+
+    def prefers_compatible(self, path: str) -> bool:
+        return os.path.splitext(path)[1].lower() not in (".mp4", ".m4v", ".webm")
+
+    def _c(self) -> CastConnection:
+        if self._conn is None or self._conn.closed:
+            self._conn = CastConnection(self.host, self.port)
+            self._transport = None
+        return self._conn
+
+    @staticmethod
+    def _media_app(status: dict) -> Optional[dict]:
+        return next((a for a in (status or {}).get("applications") or []
+                     if a.get("appId") == CAST_MEDIA_APP and a.get("transportId")), None)
+
+    def _attach(self, launch: bool) -> Optional[str]:
+        """Se conecta al reproductor del Chromecast (abriéndolo si hace falta)."""
+        c = self._c()
+        app = self._media_app(c.request(CAST_NS_RECEIVER, {"type": "GET_STATUS"}).get("status"))
+        if not app and launch:
+            resp = c.request(CAST_NS_RECEIVER, {"type": "LAUNCH", "appId": CAST_MEDIA_APP}, timeout=25)
+            if resp.get("type") == "LAUNCH_ERROR":
+                raise ProyectarError(f"El Chromecast no pudo abrir el reproductor: {resp.get('reason')}")
+            app = self._media_app(resp.get("status"))
+            end = time.monotonic() + 15
+            while not app and time.monotonic() < end:
+                time.sleep(0.5)
+                app = self._media_app(c.request(CAST_NS_RECEIVER, {"type": "GET_STATUS"}).get("status"))
+            if not app:
+                raise ProyectarError("El Chromecast no abrió el reproductor.")
+        if not app:
+            return None
+        if app["transportId"] != self._transport:
+            c.send(CAST_NS_CONN, {"type": "CONNECT"}, app["transportId"])
+            self._transport = app["transportId"]
+        return self._transport
+
+    def load(self, url: str, mime: str, title: str, live: bool, features: str = "",
+             duration: Optional[float] = None, size: Optional[int] = None,
+             sub_url: Optional[str] = None, sub_mime: str = "text/vtt") -> None:
+        with self._lock:
+            tid = self._attach(launch=True)
+            media: dict = {"contentId": url, "contentType": mime, "streamType": "LIVE" if live else "BUFFERED",
+                           "metadata": {"metadataType": 0, "title": title}}
+            if duration and not live:
+                media["duration"] = duration
+            req: dict = {"type": "LOAD", "media": media, "autoplay": True, "currentTime": 0}
+            if sub_url:
+                media["tracks"] = [{"trackId": 1, "type": "TEXT", "trackContentId": sub_url,
+                                    "trackContentType": "text/vtt", "subtype": "SUBTITLES", "language": "es",
+                                    "name": "Subtítulos"}]
+                req["activeTrackIds"] = [1]
+            resp = self._c().request(CAST_NS_MEDIA, req, tid, timeout=45)
+            if resp.get("type") != "MEDIA_STATUS":
+                raise ProyectarError(f"El Chromecast no pudo abrir el video ({resp.get('type')}). "
+                                     "Prueba el modo Compatible.")
+            st = (resp.get("status") or [{}])[0]
+            self._session = st.get("mediaSessionId")
+            self._last, self._last_at = st, time.monotonic()
+
+    def _media(self, kind: str, **extra) -> dict:
+        with self._lock:
+            tid = self._transport if self._conn and not self._conn.closed else None
+            tid = tid or self._attach(launch=False)
+            if not tid or self._session is None:
+                self._status()
+                tid = self._transport
+            if not tid or self._session is None:
+                raise ProyectarError("No hay nada reproduciéndose en el Chromecast.")
+            resp = self._c().request(CAST_NS_MEDIA, dict({"type": kind, "mediaSessionId": self._session}, **extra), tid)
+            st = (resp.get("status") or [None])[0]
+            if st:
+                self._last, self._last_at = st, time.monotonic()
+            return resp
+
+    def play(self) -> None:
+        self._media("PLAY")
+
+    def pause(self) -> None:
+        self._media("PAUSE")
+
+    def seek(self, seconds: float) -> None:
+        self._media("SEEK", currentTime=float(seconds), resumeState="PLAYBACK_START")
+
+    def stop(self) -> None:
+        if self._conn is None or self._session is None:
+            return  # no hay nada nuestro reproduciéndose
+        try:
+            self._media("STOP")
+        except ProyectarError:
+            pass
+        self._session = None
+
+    def _status(self) -> Optional[dict]:
+        with self._lock:
+            tid = self._attach(launch=False)
+            if not tid:
+                self._last = None
+                return None
+            resp = self._c().request(CAST_NS_MEDIA, {"type": "GET_STATUS"}, tid, timeout=5)
+            st = (resp.get("status") or [None])[0]
+            if st:
+                self._session = st.get("mediaSessionId", self._session)
+            self._last, self._last_at = st, time.monotonic()
+            return st
+
+    def transport_state(self) -> str:
+        st = self._status()
+        if not st:
+            return "NO_MEDIA_PRESENT"
+        return {"PLAYING": "PLAYING", "PAUSED": "PAUSED_PLAYBACK", "BUFFERING": "TRANSITIONING",
+                "LOADING": "TRANSITIONING"}.get(st.get("playerState"), "STOPPED")
+
+    def position(self) -> Tuple[Optional[float], Optional[float]]:
+        st = self._last if time.monotonic() - self._last_at < 1.5 else self._status()
+        if not st:
+            return None, None
+        return st.get("currentTime"), (st.get("media") or {}).get("duration")
+
+    def get_volume(self) -> int:
+        st = self._c().request(CAST_NS_RECEIVER, {"type": "GET_STATUS"}).get("status") or {}
+        return int(round(float((st.get("volume") or {}).get("level", 1)) * 100))
+
+    def set_volume(self, value: int) -> None:
+        level = max(0, min(100, int(value))) / 100
+        self._c().request(CAST_NS_RECEIVER, {"type": "SET_VOLUME", "volume": {"level": level}})
+
+
+def discover_cast(timeout: float = 2.5, hosts: Optional[List[str]] = None) -> List[CastRenderer]:
+    found: Dict[str, CastRenderer] = {}
+    for svc in mdns_browse(CAST_SERVICE, timeout, hosts):
+        if not svc.get("host"):
+            continue
+        t = svc.get("txt") or {}
+        name = t.get("fn") or svc["name"].split("._googlecast")[0]
+        r = CastRenderer(name, svc["host"], svc.get("port") or 8009, model=t.get("md", ""), udn=t.get("id", ""))
+        found.setdefault(r.key, r)
+    if hosts and not found:  # sin mDNS: probar si hay un Chromecast escuchando en esa IP
+        for h in hosts:
+            try:
+                socket.create_connection((h, 8009), timeout=1.5).close()
+                found[h] = CastRenderer(f"Chromecast {h}", h)
+            except OSError:
+                pass
+    return list(found.values())
+
+
+def discover(timeout: float = 3.0, hosts: Optional[List[str]] = None) -> list:
+    """Busca en la red todo lo que pueda reproducir video: DLNA y Chromecast."""
+    results: Dict[str, list] = {}
+
+    def run(name, fn):
+        try:
+            results[name] = fn(timeout=timeout, hosts=hosts)
+        except Exception as e:  # una búsqueda que falla no debe arruinar la otra
+            log.debug("Búsqueda %s falló: %s", name, e)
+            results[name] = []
+    threads = [threading.Thread(target=run, args=(n, f), daemon=True)
+               for n, f in (("dlna", discover_dlna), ("cast", discover_cast))]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout + 8)
+    found = results.get("dlna", []) + results.get("cast", [])
+    found.sort(key=lambda r: (r.name.lower(), r.kind))
+    log.info("Encontrados: %s", ", ".join(r.label for r in found) or "ninguno")
+    return found
 
 
 # ---------------------------------------------------------------------------
@@ -567,6 +1114,7 @@ class FileMedia:
             h.send_header("Content-Range", f"bytes {start}-{end}/{size}")
         h.send_header("transferMode.dlna.org", self.transfer)
         h.send_header("contentFeatures.dlna.org", self.features)
+        h.send_header("Access-Control-Allow-Origin", "*")
         for key, value in self.headers.items():
             h.send_header(key, value)
         h.end_headers()
@@ -709,6 +1257,7 @@ class LiveMedia:
         h.send_header("transferMode.dlna.org", "Streaming")
         h.send_header("contentFeatures.dlna.org", self.features)
         h.send_header("Cache-Control", "no-cache")
+        h.send_header("Access-Control-Allow-Origin", "*")
         h.send_header("Connection", "close")
         h.end_headers()
         h.close_connection = True
@@ -756,7 +1305,8 @@ class _Handler(BaseHTTPRequestHandler):
     server_version = f"{APP}/{VERSION} UPnP/1.0 DLNADOC/1.50"
 
     def log_message(self, fmt, *args):
-        log.debug("http %s %s", self.client_address[0], fmt % args)
+        if "/b/" not in self.path:  # la página del navegador consulta muy seguido
+            log.debug("http %s %s", self.client_address[0], fmt % args)
 
     def do_GET(self):
         self._serve(head=False)
@@ -764,8 +1314,41 @@ class _Handler(BaseHTTPRequestHandler):
     def do_HEAD(self):
         self._serve(head=True)
 
+    def do_POST(self):
+        if urllib.parse.urlsplit(self.path).path != "/b/reporte":
+            self.send_error(404)
+            return
+        n = int(self.headers.get("Content-Length") or 0)
+        try:
+            data = json.loads(self.rfile.read(min(n, 65536)) or b"{}")
+        except ValueError:
+            data = {}
+        self.server.hub.set_report(data)
+        self._bytes(b"{}", "application/json", head=False)
+
+    def _bytes(self, body: bytes, ctype: str, head: bool):
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        if not head:
+            self.wfile.write(body)
+
     def _serve(self, head: bool):
-        parts = urllib.parse.urlsplit(self.path).path.split("/")
+        url = urllib.parse.urlsplit(self.path)
+        if url.path in ("/", "/index.html"):
+            self._bytes(PAGE_HTML.encode("utf-8"), "text/html; charset=utf-8", head)
+            return
+        if url.path == "/b/estado":
+            q = urllib.parse.parse_qs(url.query)
+            try:
+                since = int((q.get("desde") or ["0"])[0])
+            except ValueError:
+                since = 0
+            self._bytes(json.dumps(self.server.hub.pending(since)).encode(), "application/json", head)
+            return
+        parts = url.path.split("/")
         media = self.server.routes.get(parts[2]) if len(parts) >= 3 and parts[1] == "m" else None
         if media is None:
             self.send_error(404)
@@ -796,6 +1379,7 @@ class MediaServer:
         else:
             raise ProyectarError(f"No se pudo abrir el servidor de video: {last}")
         self.httpd.routes = self.routes
+        self.hub = self.httpd.hub = BrowserHub()
         self.port = self.httpd.server_address[1]
         threading.Thread(target=self.httpd.serve_forever, daemon=True, name="http").start()
         log.debug("Servidor de video en el puerto %d", self.port)
@@ -814,6 +1398,213 @@ class MediaServer:
         self.clear()
         self.httpd.shutdown()
         self.httpd.server_close()
+
+
+# ---------------------------------------------------------------------------
+# Navegador del proyector: sirve con cualquier equipo que tenga navegador web
+# ---------------------------------------------------------------------------
+
+# Página que se abre en el proyector. JavaScript "viejo" (ES5) a propósito,
+# para que funcione también en navegadores antiguos de proyectores y TVs.
+PAGE_HTML = """<!doctype html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Proyectar</title>
+<style>
+html,body{margin:0;height:100%;background:#000;color:#e8e8e8;font-family:"Segoe UI",Roboto,Arial,sans-serif;overflow:hidden}
+#v{position:fixed;top:0;left:0;width:100%;height:100%;background:#000}
+#panel{position:fixed;top:0;left:0;right:0;bottom:0;display:flex;flex-direction:column;align-items:center;
+ justify-content:center;text-align:center;background:#000}
+h1{font-size:3.4em;margin:0 0 .3em;font-weight:600;letter-spacing:.02em}
+#msg{font-size:1.7em;color:#b0b0b0;max-width:80%;line-height:1.4}
+#go{margin-top:1.3em;font-size:2em;padding:.5em 1.4em;border:0;border-radius:14px;background:#2f7cf6;color:#fff;cursor:pointer}
+#go:focus{outline:5px solid #fff;outline-offset:4px}
+</style></head><body>
+<video id="v" playsinline></video>
+<div id="panel"><h1>Proyectar</h1><div id="msg">Conectado. Elige una película en la PC.</div>
+<button id="go" autofocus>&#9654; Pulsa OK para empezar</button></div>
+<script>
+(function(){
+var v=document.getElementById('v'),panel=document.getElementById('panel'),
+    msg=document.getElementById('msg'),go=document.getElementById('go');
+var seq=0,armed=false,cur=null,IDLE='Conectado. Elige una película en la PC.';
+function show(p){panel.style.display=p?'flex':'none';}
+function ask(t){msg.textContent=t;go.style.display='inline-block';show(true);go.focus();}
+function fs(){var e=document.documentElement,f=e.requestFullscreen||e.webkitRequestFullscreen;
+ if(f){try{f.call(e);}catch(x){}}}
+function play(){var p=v.play();if(p&&p['catch']){p['catch'](function(){
+ ask('Pulsa OK para ver «'+(cur?cur.title:'')+'»');});}}
+go.onclick=function(){armed=true;go.style.display='none';fs();
+ if(cur){show(false);play();}else{msg.textContent=IDLE;}};
+function run(c){
+ if(c.cmd==='load'){cur=c;v.innerHTML='';v.src=c.src;
+  if(c.sub){var t=document.createElement('track');t.kind='subtitles';t.src=c.sub;t.srclang='es';
+   t['default']=true;v.appendChild(t);}
+  v.load();if(armed){show(false);play();}else{ask('Pulsa OK para ver «'+c.title+'»');}}
+ else if(c.cmd==='play'){if(cur){show(false);play();}}
+ else if(c.cmd==='pause'){v.pause();}
+ else if(c.cmd==='seek'){try{v.currentTime=c.t;}catch(x){}}
+ else if(c.cmd==='volume'){v.volume=Math.max(0,Math.min(1,c.v));}
+ else if(c.cmd==='stop'){cur=null;v.pause();v.removeAttribute('src');v.innerHTML='';v.load();
+  msg.textContent=IDLE;go.style.display=armed?'none':'inline-block';show(true);}
+}
+function xhr(m,u,b,cb){var r=new XMLHttpRequest();r.open(m,u,true);
+ r.onreadystatechange=function(){if(r.readyState===4&&cb){cb(r.status===200?r.responseText:null);}};
+ if(b){r.setRequestHeader('Content-Type','application/json');r.send(b);}else{r.send();}}
+function report(){xhr('POST','/b/reporte',JSON.stringify({t:v.currentTime||0,
+ d:isFinite(v.duration)?v.duration:null,paused:v.paused,ended:v.ended,vol:v.volume,
+ err:v.error?v.error.code:null,src:!!cur,armed:armed}),null);}
+function poll(){xhr('GET','/b/estado?desde='+seq+'&_='+(new Date()).getTime(),null,function(t){
+ if(t){try{var d=JSON.parse(t);for(var i=0;i<d.cmds.length;i++){run(d.cmds[i]);}seq=d.seq;}catch(x){}}
+ report();setTimeout(poll,700);});}
+v.onerror=function(){if(cur){ask('Este navegador no puede reproducir el video. En la PC usa el modo Compatible.');}};
+v.onended=function(){msg.textContent='Terminó.';show(true);};
+document.onkeydown=function(e){var k=e.keyCode;
+ if(!cur||panel.style.display!=='none'){return;}
+ if(k===13||k===32||k===179||k===85||k===415||k===19){if(v.paused){play();}else{v.pause();}}};
+poll();
+})();
+</script></body></html>
+"""
+
+
+class BrowserHub:
+    """Cola de órdenes para la página abierta en el navegador del proyector."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.cmds: List[dict] = []
+        self.seq = 0
+        self.report: dict = {}
+        self.seen = 0.0
+
+    def push(self, cmd: dict) -> None:
+        with self.lock:
+            self.seq += 1
+            self.cmds.append(dict(cmd, seq=self.seq))
+            del self.cmds[:-50]
+
+    def pending(self, since: int) -> dict:
+        with self.lock:
+            self.seen = time.monotonic()
+            if since <= 0 or since > self.seq:  # página recién abierta: desde el último video
+                starts = [i for i, c in enumerate(self.cmds) if c["cmd"] in ("load", "stop")]
+                cmds = self.cmds[starts[-1]:] if starts else []
+            else:
+                cmds = [c for c in self.cmds if c["seq"] > since]
+            return {"seq": self.seq, "cmds": cmds}
+
+    def set_report(self, data: dict) -> None:
+        with self.lock:
+            self.report = data if isinstance(data, dict) else {}
+            self.seen = time.monotonic()
+
+    @property
+    def connected(self) -> bool:
+        return time.monotonic() - self.seen < 6
+
+
+class BrowserRenderer:
+    """El navegador web del proyector, manejado desde la PC."""
+    kind = "Navegador"
+    live_format = "mp4"
+    name = "Navegador del proyector"
+    host = udn = manufacturer = model = ""
+    location = key = "navegador"
+
+    def __init__(self, hub: BrowserHub, page_url: Callable[[], str]):
+        self.hub = hub
+        self.page_url = page_url
+
+    @property
+    def label(self) -> str:
+        return "Navegador del proyector  —  sirve con cualquier proyector con navegador web"
+
+    @property
+    def connected(self) -> bool:
+        return self.hub.connected
+
+    def prefers_compatible(self, path: str) -> bool:
+        return os.path.splitext(path)[1].lower() not in (".mp4", ".m4v", ".webm")
+
+    def load(self, url: str, mime: str, title: str, live: bool, features: str = "", duration=None,
+             size=None, sub_url: Optional[str] = None, sub_mime: str = "") -> None:
+        path = urllib.parse.urlsplit(url).path
+        sub = urllib.parse.urlsplit(sub_url).path if sub_url else None
+        self.hub.push({"cmd": "load", "src": path, "title": title, "live": live, "sub": sub})
+
+    def play(self) -> None:
+        self.hub.push({"cmd": "play"})
+
+    def pause(self) -> None:
+        self.hub.push({"cmd": "pause"})
+
+    def stop(self) -> None:
+        self.hub.push({"cmd": "stop"})
+
+    def seek(self, seconds: float) -> None:
+        self.hub.push({"cmd": "seek", "t": float(seconds)})
+
+    def transport_state(self) -> str:
+        rep = self.hub.report
+        if not self.connected or not rep.get("src"):
+            return "NO_MEDIA_PRESENT"
+        if rep.get("ended") or rep.get("err"):
+            return "STOPPED"
+        return "PAUSED_PLAYBACK" if rep.get("paused") else "PLAYING"
+
+    def position(self) -> Tuple[Optional[float], Optional[float]]:
+        rep = self.hub.report
+        return rep.get("t"), rep.get("d")
+
+    def get_volume(self) -> int:
+        return int(round(float(self.hub.report.get("vol", 1)) * 100))
+
+    def set_volume(self, value: int) -> None:
+        self.hub.push({"cmd": "volume", "v": max(0, min(100, int(value))) / 100})
+
+
+def srt_to_vtt(text: str) -> str:
+    text = text.replace("\r\n", "\n").replace("\r", "\n").lstrip("﻿")
+    if text.lstrip().startswith("WEBVTT"):
+        return text
+    return "WEBVTT\n\n" + re.sub(r"(\d{1,2}:\d{2}:\d{2}),(\d{3})", r"\1.\2", text)
+
+
+class TextMedia:
+    """Texto generado en memoria (por ejemplo, subtítulos convertidos a WebVTT)."""
+    live = False
+
+    def __init__(self, name: str, mime: str, data: bytes):
+        self.name, self.mime, self.data = name, mime, data
+        self.features = FILE_FEATURES
+        self.headers: Dict[str, str] = {}
+        self.requests = 0
+        self.last_error: Optional[str] = None
+
+    @property
+    def size(self) -> int:
+        return len(self.data)
+
+    def close(self) -> None:
+        pass
+
+    def serve(self, h: BaseHTTPRequestHandler, head: bool) -> None:
+        h.send_response(200)
+        h.send_header("Content-Type", self.mime)
+        h.send_header("Content-Length", str(len(self.data)))
+        h.send_header("Access-Control-Allow-Origin", "*")
+        h.end_headers()
+        if not head:
+            h.wfile.write(self.data)
+
+
+def vtt_media(path: str) -> TextMedia:
+    with open(path, "rb") as f:
+        raw = f.read()
+    enc = subtitle_charenc(path) or "utf-8-sig"
+    text = raw.decode({"CP1252": "cp1252", "UTF-16": "utf-16"}.get(enc, enc), "replace")
+    return TextMedia("subtitulos.vtt", "text/vtt", srt_to_vtt(text).encode("utf-8"))
 
 
 # ---------------------------------------------------------------------------
@@ -1063,11 +1854,24 @@ def video_encoder_args(caps: Dict[str, bool], crf: int, maxrate_mbps: int, zerol
     return ["-c:v", "mpeg2video", "-q:v", "3", "-maxrate", f"{maxrate_mbps * 2}M", "-bufsize", "8M"]
 
 
+LIVE_FORMATS = {  # contenedor: (nombre del archivo, tipo MIME)
+    "ts": ("video/mpeg", ".ts"),      # DLNA
+    "mp4": ("video/mp4", ".mp4"),     # Chromecast y navegadores (MP4 fragmentado)
+}
+
+
+def output_args(container: str) -> List[str]:
+    if container == "mp4":
+        return ["-f", "mp4", "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+                "-frag_duration", "1000000", "pipe:1"]
+    return ["-f", "mpegts", "-mpegts_flags", "+resend_headers", "pipe:1"]
+
+
 def build_transcode_args(ff: str, path: str, info: MediaInfo, offset: float = 0.0,
                          audio: Optional[Stream] = None, sub_file: Optional[str] = None,
                          sub_stream: Optional[Stream] = None, caps: Optional[Dict[str, bool]] = None,
-                         max_height: int = 1080) -> List[str]:
-    """Comando ffmpeg que convierte la película en vivo a H.264 + AAC (MPEG-TS)."""
+                         max_height: int = 1080, container: str = "ts") -> List[str]:
+    """Comando ffmpeg que convierte la película en vivo a H.264 + AAC."""
     caps = caps if caps is not None else ffmpeg_caps(ff)
     if sub_file and not caps.get("subtitles"):
         raise ProyectarError("Este ffmpeg no puede dibujar subtítulos de texto (le falta libass).")
@@ -1105,8 +1909,7 @@ def build_transcode_args(ff: str, path: str, info: MediaInfo, offset: float = 0.
     if info.audios or unknown:
         amap = f"0:a:{(audio or info.default_audio).type_index}" if info.audios else "0:a:0?"
         args += ["-map", amap, "-c:a", "aac", "-b:a", "192k", "-ac", "2", "-ar", "48000"]
-    args += ["-f", "mpegts", "-mpegts_flags", "+resend_headers", "pipe:1"]
-    return args
+    return args + output_args(container)
 
 
 # --- captura de pantalla y sonido ---
@@ -1257,7 +2060,7 @@ def loopback_feeder(stdin, stop: threading.Event, rate: int = 48000, channels: i
 
 
 def screen_commands(ff: str, caps: Dict[str, bool], height: int = 1080, fps: int = 30,
-                    audio: Optional[tuple] = None) -> List[Tuple[List[str], Optional[Callable]]]:
+                    audio: Optional[tuple] = None, container: str = "ts") -> List[Tuple[List[str], Optional[Callable]]]:
     """Comandos ffmpeg para capturar la pantalla (+ sonido), de mejor a peor opción."""
     a_in: List[str] = []
     feeder = None
@@ -1294,7 +2097,7 @@ def screen_commands(ff: str, caps: Dict[str, bool], height: int = 1080, fps: int
     if a_in:
         tail += ["-map", "1:a:0", "-af", "aresample=async=1000", "-c:a", "aac", "-b:a", "160k",
                  "-ac", "2", "-ar", "48000"]
-    tail += ["-f", "mpegts", "-mpegts_flags", "+resend_headers", "-muxdelay", "0", "-muxpreload", "0", "pipe:1"]
+    tail += ["-muxdelay", "0", "-muxpreload", "0"] + output_args(container)
     head = [ff, "-hide_banner", "-nostdin", "-loglevel", "error"]
     return [(head + ["-thread_queue_size", "512"] + v + a_in + tail, feeder) for v in video_inputs]
 
@@ -1328,28 +2131,46 @@ class Caster:
         self._clock = 0.0
         self._last_poll: Optional[float] = None
         self._was_playing = False
+        self._browser: Optional[BrowserRenderer] = None
+        self.auto_compatible = False
 
     # --- infraestructura ---
+    def ensure_server(self) -> MediaServer:
+        if self.server is None:
+            self.server = MediaServer()
+        return self.server
+
+    def page_url(self) -> str:
+        """Dirección para abrir en el navegador del proyector."""
+        ip = local_ip_for("239.255.255.250") or (local_ipv4s() or ["127.0.0.1"])[0]
+        return f"http://{ip}:{self.ensure_server().port}"
+
+    def browser(self) -> BrowserRenderer:
+        if self._browser is None:
+            self._browser = BrowserRenderer(self.ensure_server().hub, self.page_url)
+        return self._browser
+
     def _url(self, path: str) -> str:
-        ip = local_ip_for(self.renderer.host) or (local_ipv4s() or ["127.0.0.1"])[0]
+        host = getattr(self.renderer, "host", "")
+        ip = (local_ip_for(host) if host else None) or local_ip_for("239.255.255.250") \
+            or (local_ipv4s() or ["127.0.0.1"])[0]
         return f"http://{ip}:{self.server.port}{path}"
 
-    def _switch_renderer(self, renderer: Renderer) -> None:
+    def _switch_renderer(self, renderer) -> None:
         if self.renderer and self.mode and self.renderer.key != renderer.key:
             try:
                 self.renderer.stop()
-            except DLNAError:
+            except ProyectarError:
                 pass
         self.renderer = renderer
 
-    def _send(self, media, title: str, sub: Optional[FileMedia] = None) -> None:
-        if self.server is None:
-            self.server = MediaServer()
+    def _send(self, media, title: str, sub=None) -> None:
+        self.ensure_server()
         r = self.renderer
         try:
             r.stop()
             time.sleep(0.2)
-        except DLNAError:
+        except ProyectarError:
             pass
         self.server.clear()
         url = self._url(self.server.add(media))
@@ -1357,29 +2178,22 @@ class Caster:
         if sub:
             sub_url = self._url(self.server.add(sub))
             media.headers["CaptionInfo.sec"] = sub_url
-        meta = didl_metadata(title, url, media.mime, media.features,
-                             duration=None if media.live else self.duration,
-                             size=None if media.live else media.size,
-                             sub_url=sub_url, sub_mime=sub.mime if sub else "text/srt")
         log.info("Enviando %s a %s", url, r.label)
-        r.set_uri(url, meta)
         self.media = media
         self.sent_at = time.monotonic()
         self._clock, self._last_poll, self._was_playing = 0.0, None, False
-        error = None
-        for _ in range(4):
-            try:
-                r.play()
-                return
-            except DLNAError as e:  # algunos todavía están cargando: reintentamos
-                error = e
-                time.sleep(0.8)
-        try:
-            if r.transport_state() in ("PLAYING", "TRANSITIONING"):
-                return  # empezó solo
-        except DLNAError:
-            pass
-        raise error
+        r.load(url, media.mime, title, media.live, media.features,
+               duration=None if media.live else self.duration,
+               size=None if media.live else media.size,
+               sub_url=sub_url, sub_mime=sub.mime if sub else "text/srt")
+
+    def _sub_media(self, path: str):
+        """Subtítulos externos en el formato que entiende cada tipo de proyector."""
+        if self.renderer.kind == "DLNA":
+            return FileMedia(path, transfer="Interactive")
+        if os.path.splitext(path)[1].lower() in (".srt", ".vtt"):
+            return vtt_media(path)  # Chromecast y navegadores usan WebVTT
+        return None
 
     def tmpdir(self) -> str:
         if not self._tmp:
@@ -1412,6 +2226,9 @@ class Caster:
         self.title = os.path.splitext(os.path.basename(path))[0]
         self.info = info if info is not None else probe(path)
         self.duration = self.info.duration
+        # Chromecast y navegadores sólo abren MP4/WebM: el resto se convierte solo
+        self.auto_compatible = not compatible and renderer.prefers_compatible(path) and bool(find_ffmpeg())
+        compatible = compatible or self.auto_compatible
         if compatible:
             ff = require_ffmpeg()
             sub_file = sub_stream = None
@@ -1428,7 +2245,7 @@ class Caster:
         else:
             if isinstance(subtitle, Stream):
                 raise ProyectarError("Los subtítulos internos sólo se pueden mostrar en modo Compatible.")
-            sub = FileMedia(subtitle, transfer="Interactive") if subtitle else None
+            sub = self._sub_media(subtitle) if subtitle else None
             self.offset = 0.0
             self._send(FileMedia(path), self.title, sub)
             self.mode = "archivo"
@@ -1436,9 +2253,11 @@ class Caster:
     def _start_converted(self, offset: float) -> None:
         o = self._tc
         caps = ffmpeg_caps(o["ff"])
+        container = self.renderer.live_format
         args = build_transcode_args(o["ff"], self.path, self.info, offset, o["audio"],
-                                    o["sub_file"], o["sub_stream"], caps)
-        media = LiveMedia("pelicula.ts", "video/mpeg", [lambda: FFmpegProcess(args)])
+                                    o["sub_file"], o["sub_stream"], caps, container=container)
+        mime, ext = LIVE_FORMATS[container]
+        media = LiveMedia("pelicula" + ext, mime, [lambda: FFmpegProcess(args)])
         self.offset = offset
         self._send(media, self.title)
 
@@ -1449,11 +2268,13 @@ class Caster:
             log.warning("En Wayland la captura de pantalla puede salir negra; usa una sesión X11.")
         self._switch_renderer(renderer)
         self.mode = None
+        container = renderer.live_format
         cmds = [(lambda a=a, f=f: FFmpegProcess(a, f))
-                for a, f in screen_commands(ff, ffmpeg_caps(ff), height, fps, audio)]
+                for a, f in screen_commands(ff, ffmpeg_caps(ff), height, fps, audio, container)]
         self.title = f"Pantalla de {socket.gethostname()}"
         self.duration, self.offset, self.path = None, 0.0, None
-        self._send(LiveMedia("pantalla.ts", "video/mpeg", cmds), self.title)
+        mime, ext = LIVE_FORMATS[container]
+        self._send(LiveMedia("pantalla" + ext, mime, cmds), self.title)
         self.mode = "pantalla"
 
     def toggle_pause(self) -> str:
@@ -1473,7 +2294,7 @@ class Caster:
         if self.renderer and self.mode:
             try:
                 self.renderer.stop()
-            except DLNAError:
+            except ProyectarError:
                 pass
         if self.server:
             self.server.clear()
@@ -1501,11 +2322,11 @@ class Caster:
         r = self.renderer
         if not r or not self.mode:
             return {"state": "", "position": 0.0, "duration": None, "mode": None,
-                    "requests": 0, "error": None, "since": 0.0}
+                    "requests": 0, "error": None, "since": 0.0, "kind": "", "connected": True}
         state = r.transport_state()
         try:
             rel, dur = r.position()
-        except DLNAError:
+        except ProyectarError:
             rel, dur = None, None
         now = time.monotonic()
         # Reloj propio por si el proyector no informa la posición
@@ -1526,7 +2347,7 @@ class Caster:
         return {
             "state": state, "position": pos, "duration": dur, "mode": self.mode,
             "requests": getattr(media, "requests", 0), "error": getattr(media, "last_error", None),
-            "since": now - self.sent_at,
+            "since": now - self.sent_at, "kind": r.kind, "connected": getattr(r, "connected", True),
         }
 
     def close(self) -> None:
@@ -1540,6 +2361,50 @@ class Caster:
         if self._tmp:
             shutil.rmtree(self._tmp, ignore_errors=True)
             self._tmp = None
+
+
+def cargar_luces():
+    """El programa «Luces» (carpeta luces/ al lado) si está instalado y conectado a Smart Life."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    for folder in (here, os.path.join(os.path.dirname(here), "luces"), os.path.join(here, "luces")):
+        if os.path.isfile(os.path.join(folder, "luces.py")):
+            if folder not in sys.path:
+                sys.path.append(folder)
+            try:
+                import luces
+                hogar = luces.Hogar()
+                return hogar if hogar.configurado and hogar.luces else None
+            except Exception as e:
+                log.debug("No se pudo cargar Luces: %s", e)
+                return None
+    return None
+
+
+def abrir_miracast() -> None:
+    """Abre el panel «Transmitir» de Windows (lo mismo que pulsar Win + K)."""
+    if os.name != "nt":
+        raise ProyectarError("Miracast se usa desde Windows (Win + K).")
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        win, k, up = 0x5B, 0x4B, 0x0002
+        user32.keybd_event(win, 0, 0, 0)
+        user32.keybd_event(k, 0, 0, 0)
+        user32.keybd_event(k, 0, up, 0)
+        user32.keybd_event(win, 0, up, 0)
+    except Exception:
+        os.startfile("ms-settings-connectabledevices:devicediscovery")  # type: ignore[attr-defined]
+
+
+BROWSER_HELP = """En el proyector abre el navegador de internet
+(puede llamarse «Navegador», «Browser», «Chrome» o «Internet»)
+y escribe esta dirección:
+
+        {url}
+
+Cuando aparezca «Proyectar», pulsa OK en el control remoto.
+Desde ahí todo se maneja desde la PC. Puedes guardar la dirección
+en favoritos del proyector para la próxima vez."""
 
 
 def media_summary(info: MediaInfo, external_subs: int = 0) -> Tuple[str, List[str]]:
@@ -1590,6 +2455,12 @@ class App:
         self.dragging = False
         self.last_state = ""
         self.warned = False
+        self.hogar_luces = cargar_luces()
+        self._luces_foto: Optional[dict] = None
+        try:
+            self.caster.ensure_server()  # para que la página del navegador ya responda
+        except ProyectarError as e:
+            log.warning("%s", e)
 
         root.title(f"{APP} – películas al proyector")
         self._style()
@@ -1703,6 +2574,12 @@ class App:
         self.vol.bind("<ButtonRelease-1>", self._vol_release)
         ttk.Label(btns, text="Volumen").pack(side="right")
 
+        self.cine_var = tk.BooleanVar(value=bool(self.cfg.get("modo_cine", True)))
+        if self.hogar_luces:
+            ttk.Checkbutton(ctl, text="Modo cine: bajar las luces de Smart Life mientras se proyecta",
+                            variable=self.cine_var, command=self._cine_cambiado).grid(
+                row=2, column=0, columnspan=3, sticky="w", pady=(8, 0))
+
         self.status_lbl = ttk.Label(r, text="", style="Status.TLabel", anchor="w", padding=(14, 8))
         self.status_lbl.grid(row=3, column=0, sticky="ew")
         r.update_idletasks()
@@ -1768,14 +2645,24 @@ class App:
                   ).grid(row=4, column=0, columnspan=2, sticky="w", pady=(10, 0))
         ttk.Button(f, text="▶  Transmitir pantalla", style="Big.TButton",
                    command=self.play_screen).grid(row=5, column=0, columnspan=2, pady=(16, 0))
+        if os.name == "nt":
+            ttk.Button(f, text="Duplicar con Miracast (Win + K)", command=self.miracast).grid(
+                row=6, column=0, columnspan=2, pady=(8, 0))
 
     def set_status(self, text: str, error: bool = False):
         self.status_lbl.configure(text=text, style="Error.TLabel" if error else "Status.TLabel")
 
     # --- proyectores ---
-    def current_renderer(self) -> Optional[Renderer]:
+    def current_renderer(self):
         i = self.dev_combo.current()
-        return self.renderers[i] if 0 <= i < len(self.renderers) else None
+        if 0 <= i < len(self.renderers):
+            return self.renderers[i]
+        if i == len(self.renderers) and self.caster.server is not None:
+            return self.caster.browser()
+        return None
+
+    def _labels(self) -> List[str]:
+        return [r.label for r in self.renderers] + [BrowserRenderer.label.fget(None)]
 
     def search(self, hosts: Optional[List[str]] = None):
         self.btn_search.state(["disabled"])
@@ -1799,31 +2686,39 @@ class App:
         known = {r.key: r for r in self.renderers}
         for r in found:
             known[r.key] = r
-        self.renderers = sorted(known.values(), key=lambda r: r.name.lower())
-        self.dev_combo.configure(values=[r.label for r in self.renderers])
+        current = self.current_renderer()
+        self.renderers = sorted(known.values(), key=lambda r: (r.name.lower(), r.kind))
+        self.dev_combo.configure(values=self._labels())
         if not self.renderers:
-            self.dev_combo.set("")
-            self.set_status("No encontré proyectores. Revisa que estén en la misma WiFi, o usa «Por IP…».",
-                            error=True)
+            self.dev_combo.current(0)  # sólo queda el navegador
+            self.set_status("No encontré el proyector por DLNA ni Chromecast. Puedes usar «Navegador del "
+                            "proyector» o, en Windows, Miracast.", error=True)
             if not self.warned:
                 self.warned = True
                 messagebox.showwarning(APP, NOT_FOUND_HELP, parent=self.root)
+            self._device_selected()
             return
-        current = self.current_renderer()
         last = self.cfg.get("ultimo_proyector", {}).get("udn")
-        pick = next((i for i, r in enumerate(self.renderers) if current and r.key == current.key), None)
+        options = self.renderers + [self.caster.browser()]
+        pick = next((i for i, r in enumerate(options) if current and r.key == current.key), None)
         if pick is None:
-            pick = next((i for i, r in enumerate(self.renderers) if last and r.udn == last), 0)
+            pick = next((i for i, r in enumerate(options) if last and (r.udn or r.key) == last), 0)
         self.dev_combo.current(pick)
         n = len(self.renderers)
-        self.set_status(f"Listo. {'Encontré 1 proyector' if n == 1 else f'Encontré {n} dispositivos'}.")
+        self.set_status(f"Listo. {'Encontré 1 equipo' if n == 1 else f'Encontré {n} equipos'} para proyectar.")
         self._device_selected()
 
     def _device_selected(self, _event=None):
         r = self.current_renderer()
-        if r:
-            self.cfg["ultimo_proyector"] = {"udn": r.udn, "location": r.location, "name": r.name}
-            save_config(self.cfg)
+        if not r:
+            return
+        self.cfg["ultimo_proyector"] = {"udn": r.udn or r.key, "location": r.location, "name": r.name,
+                                        "kind": r.kind}
+        save_config(self.cfg)
+        if r.kind == "Navegador":
+            if not r.connected:
+                self.set_status(f"En el navegador del proyector abre {self.caster.page_url()} y pulsa OK.")
+        else:
             self.bg(r.get_volume, done=self._show_volume, quiet=True)
 
     def _show_volume(self, v):
@@ -1942,9 +2837,18 @@ class App:
             return
         path, info = self.file_path, self.file_info
         title = os.path.basename(path)
+        self._browser_help(r)
         self.set_status(f"Enviando «{title}» a {r.name}…")
-        self.bg(lambda: self.caster.play_file(r, path, compatible, audio, sub, info),
-                done=lambda _: self._started(f"Proyectando «{title}» en {r.name}"))
+
+        def done(_):
+            extra = " (se convierte en vivo: este equipo no abre ese formato directo)" \
+                if self.caster.auto_compatible else ""
+            self._started(f"Proyectando «{title}» en {r.name}{extra}")
+        self.bg(lambda: self.caster.play_file(r, path, compatible, audio, sub, info), done=done)
+
+    def _browser_help(self, r):
+        if r.kind == "Navegador" and not r.connected:
+            messagebox.showinfo(APP, BROWSER_HELP.format(url=self.caster.page_url()), parent=self.root)
 
     # --- pantalla ---
     def _load_screen_audio(self):
@@ -1968,6 +2872,7 @@ class App:
         fps = [30, 60, 24][max(0, self.fps_combo.current())]
         i = self.sa_combo.current()
         audio = self.screen_audio[i][1] if 0 <= i < len(self.screen_audio) else None
+        self._browser_help(r)
         self.set_status(f"Conectando la pantalla con {r.name}…")
         self.bg(lambda: self.caster.play_screen(r, height, fps, audio),
                 done=lambda _: self._started(f"Transmitiendo la pantalla en {r.name} "
@@ -1977,9 +2882,52 @@ class App:
     def _started(self, text):
         self.last_state = ""
         self.set_status(text)
+        self._cine_on()
         r = self.caster.renderer
-        if r:
+        if r and r.kind != "Navegador":
             self.bg(r.get_volume, done=self._show_volume, quiet=True)
+
+    def miracast(self):
+        try:
+            abrir_miracast()
+            self.set_status("Elige el proyector en el panel «Transmitir» de Windows. Si no aparece, en el "
+                            "proyector abre la app «Screen Mirroring» o «Miracast».")
+        except ProyectarError as e:
+            self.set_status(str(e), error=True)
+
+    # --- modo cine (luces de Smart Life) ---
+    def _cine_cambiado(self):
+        self.cfg["modo_cine"] = self.cine_var.get()
+        save_config(self.cfg)
+        if not self.cine_var.get():
+            self._cine_off()
+        elif self.caster.mode:
+            self._cine_on()
+
+    def _cine_on(self):
+        hogar = self.hogar_luces
+        if not hogar or not self.cine_var.get() or self._luces_foto is not None:
+            return
+        self._luces_foto = {}
+
+        def work():
+            hogar.actualizar_todo()
+            foto = hogar.foto()  # para dejarlas como estaban al terminar
+            hogar.aplicar_escena("Cine")
+            return foto
+        self.bg(work, done=lambda foto: setattr(self, "_luces_foto", foto), quiet=True, serial=False)
+
+    def _cine_off(self, wait: bool = False):
+        hogar, foto, self._luces_foto = self.hogar_luces, self._luces_foto, None
+        if not hogar or not foto:
+            return
+        if wait:
+            try:
+                hogar.restaurar(foto)
+            except Exception:
+                pass
+        else:
+            self.bg(lambda: hogar.restaurar(foto), quiet=True, serial=False)
 
     def toggle_pause(self):
         if not self.caster.mode:
@@ -1990,6 +2938,7 @@ class App:
     def stop(self):
         if self.caster.mode:
             self.bg(self.caster.stop, done=lambda _: self._reset_controls("Detenido."))
+        self._cine_off()
 
     def _reset_controls(self, text):
         self.seek_bar.set(0)
@@ -2051,7 +3000,12 @@ class App:
         self.btn_pause.configure(text="⏸ Pausa" if state in ("PLAYING", "TRANSITIONING") else "▶ Seguir")
         name = self.caster.renderer.name if self.caster.renderer else ""
         stopped = state in ("STOPPED", "NO_MEDIA_PRESENT")
-        if st["error"] and stopped:
+        if stopped and self.last_state == "PLAYING":
+            self._cine_off()  # terminó la película: vuelven las luces
+        if st["kind"] == "Navegador" and not st["connected"]:
+            self.set_status(f"Esperando al navegador del proyector: abre {self.caster.page_url()} y pulsa OK.",
+                            error=True)
+        elif st["error"] and stopped:
             self.set_status("ffmpeg falló: " + st["error"].splitlines()[-1][:150], error=True)
         elif st["requests"] == 0 and st["since"] > 10 and state != "PLAYING":
             self.set_status("El proyector todavía no pidió el video. Si es la primera vez, permite a Python "
@@ -2067,7 +3021,11 @@ class App:
     def close(self):
         self.set_status("Cerrando…")
         self.root.update_idletasks()
-        t = threading.Thread(target=self.caster.close, daemon=True)
+
+        def shutdown():
+            self._cine_off(wait=True)
+            self.caster.close()
+        t = threading.Thread(target=shutdown, daemon=True)
         t.start()
         t.join(5)
         self.jobs.shutdown(wait=False)
@@ -2099,7 +3057,10 @@ CLI_HELP = ("Comandos:  [Enter] estado · p pausa/sigue · + adelanta 30 s · - 
             "ir 1:20:00 · vol 50 · s salir")
 
 
-def pick_renderer(query: Optional[str]) -> Renderer:
+def pick_renderer(query: Optional[str], caster: Optional["Caster"] = None):
+    if query and query.strip().lower() in ("navegador", "browser") and caster is not None:
+        print(BROWSER_HELP.format(url=caster.page_url()))
+        return caster.browser()
     hosts = [query] if query and looks_like_ip(query) else None
     print("Buscando proyectores en la red…")
     found = discover(hosts=hosts)
@@ -2114,7 +3075,7 @@ def pick_renderer(query: Optional[str]) -> Renderer:
     if query and not hosts:
         found = [r for r in found if query.lower() in r.name.lower() or query == r.host]
     if not found:
-        raise ProyectarError(NOT_FOUND_HELP)
+        raise ProyectarError(NOT_FOUND_HELP + "\n\nEn la consola: --proyector navegador")
     if len(found) == 1:
         return found[0]
     for i, r in enumerate(found, 1):
@@ -2176,11 +3137,12 @@ def run_cli(args) -> int:
         for r in found:
             extra = " ".join(x for x in (r.manufacturer, r.model) if x)
             print(f"• {r.label}" + (f"  [{extra}]" if extra else ""))
+        print("• También: --proyector navegador (el navegador web del proyector)")
         return 0
 
     caster = Caster()
     try:
-        renderer = pick_renderer(args.proyector)
+        renderer = pick_renderer(args.proyector, caster)
         if args.pantalla:
             audio = None
             if not args.sin_sonido:
@@ -2218,6 +3180,7 @@ def run_cli(args) -> int:
                 audio = info.audios[args.audio - 1]
             compatible = args.compatible or isinstance(sub, Stream) or audio is not None
             caster.play_file(renderer, path, compatible, audio, sub, info)
+            compatible = compatible or caster.auto_compatible
             print(f"▶ Proyectando en {renderer.label}" + ("  (modo Compatible)" if compatible else ""))
         interactive(caster)
         return 0
@@ -2254,7 +3217,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         epilog="Sin argumentos abre la ventana.")
     p.add_argument("archivo", nargs="?", help="película a proyectar")
     p.add_argument("-l", "--listar", action="store_true", help="buscar proyectores en la red y salir")
-    p.add_argument("-p", "--proyector", help="nombre (o parte) o IP del proyector")
+    p.add_argument("-p", "--proyector", help="nombre (o parte) o IP del proyector, o 'navegador'")
     p.add_argument("-c", "--compatible", action="store_true",
                    help="convertir en vivo con ffmpeg (si no se ve o no se escucha)")
     p.add_argument("--audio", type=int, help="pista de audio (1, 2, …); activa el modo compatible")

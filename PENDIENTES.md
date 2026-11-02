@@ -1,16 +1,12 @@
 # Pendientes
 
 - [x] **Proyectar películas de la PC al proyector por WiFi**: listo, en [`proyector/`](proyector/).
+  - [ ] Probarlo con el proyector real. Ya busca DLNA y Chromecast, y además puede usar el navegador del proyector o Miracast.
 
-- [ ] **Controlar las luces LED inteligentes desde la PC**
-  - Idea: un programa (ventana, como `Proyectar`) para prender y apagar, cambiar color y brillo,
-    y guardar escenas. Por ejemplo, un **«modo cine»** que baje las luces al empezar la película
-    y las suba al terminar, conectado con `Proyectar`.
-  - Para empezar falta saber:
-    - Marca o app de las luces: Tuya / Smart Life, Philips Hue, Yeelight, TP-Link Tapo/Kasa,
-      Govee, WiZ, Sonoff/eWeLink, otra.
-    - Cómo se conectan: WiFi directo, Bluetooth, o a través de un hub/puente.
-    - Cuántas son y en qué ambientes están.
+- [x] **Controlar la luz del techo (Smart Life) desde la PC**: listo, en [`luces/`](luces/), con el cuarto en 3D.
+  - [ ] Conectar la cuenta de Smart Life (pasos en la ventana del programa).
+  - [ ] «Modo cine» de Proyectar: bajar la luz al empezar la película (ya está; probarlo con la luz real).
+  - [ ] Cuando haya mudanza: modelar el cuarto nuevo en 3D.
 
 - [ ] **Cambiar la estética del proyector**
   - Para empezar falta definir:

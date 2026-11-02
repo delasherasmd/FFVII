@@ -1,0 +1,536 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Luces</title>
+<link rel="icon" href="/recursos/icono.png">
+<style>
+:root{
+  --bg:#141218; --card:#1e1b24; --card2:#26222e; --line:#302b39; --text:#f4efe9; --muted:#9d95a8;
+  --accent:#ffb547; --accent2:#ff8a3d; --ok:#5fd38d; --warn:#ffcf5c; --err:#ff6b6b;
+  --r:20px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
+  font-family:"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,Roboto,sans-serif;-webkit-font-smoothing:antialiased}
+button,input,select{font:inherit;color:inherit}
+button{cursor:pointer}
+.app{display:grid;grid-template-rows:auto 1fr;height:100%}
+header{display:flex;align-items:center;gap:14px;padding:14px 22px 6px}
+.logo{width:34px;height:34px;border-radius:11px;background:linear-gradient(135deg,#ffcf6b,#ff8a3d);display:grid;place-items:center;
+  box-shadow:0 0 24px rgba(255,170,70,.35)}
+.logo svg{width:20px;height:20px}
+.title{font-size:20px;font-weight:650;letter-spacing:.2px}
+.title small{display:block;font-size:13px;font-weight:400;color:var(--muted)}
+.spacer{flex:1}
+.iconbtn{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);background:var(--card);
+  padding:9px 14px;border-radius:12px;color:var(--text);transition:.15s}
+.iconbtn:hover{background:var(--card2);border-color:#3d3747}
+.iconbtn svg{width:18px;height:18px;opacity:.9}
+main{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:18px;padding:12px 22px 22px;min-height:0}
+@media (max-width:980px){main{grid-template-columns:1fr} aside{order:2}}
+.stage{display:flex;flex-direction:column;gap:12px;min-width:0;min-height:0}
+#escena{position:relative;width:100%;flex:1;min-height:380px;border-radius:24px;overflow:hidden;background:#050407;
+  box-shadow:0 18px 50px rgba(0,0,0,.45),0 0 0 1px rgba(255,255,255,.04);user-select:none}
+#tres{position:absolute;inset:0;width:100%;height:100%;display:block;cursor:grab;touch-action:none}
+#tres:active{cursor:grabbing}
+#marcas{position:absolute;inset:0;pointer-events:none}
+#marcas .marca{pointer-events:auto}
+#sin3d{position:absolute;inset:0;display:none;place-items:center;text-align:center;color:var(--muted);padding:30px}
+.marca{position:absolute;left:0;top:0;display:flex;flex-direction:column;align-items:center;gap:6px;
+  border:0;background:none;padding:0;touch-action:none;will-change:transform}
+.marca .bola{width:46px;height:46px;border-radius:50%;display:grid;place-items:center;background:rgba(20,18,26,.72);
+  border:2px solid rgba(255,255,255,.18);backdrop-filter:blur(6px);transition:transform .15s,box-shadow .3s,border-color .2s}
+.marca .bola svg{width:24px;height:24px}
+.marca:hover .bola{transform:scale(1.08)}
+.marca.sel .bola{border-color:var(--accent);box-shadow:0 0 0 4px rgba(255,181,71,.25),0 0 30px var(--glow,transparent)}
+.marca.on .bola{box-shadow:0 0 26px var(--glow,transparent)}
+.marca .nombre{font-size:12.5px;padding:3px 9px;border-radius:999px;background:rgba(20,18,26,.75);white-space:nowrap;
+  backdrop-filter:blur(6px);border:1px solid rgba(255,255,255,.08)}
+.marca.off .nombre{color:var(--muted)}
+.marca.sin .bola{border-style:dashed;opacity:.75}
+.editando .marca{cursor:grab}
+.editando .marca .bola{border-color:#7fd1ff;border-style:dashed}
+.chipbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.chip{border:1px solid var(--line);background:var(--card);padding:9px 14px;border-radius:999px;transition:.15s;display:inline-flex;gap:8px;align-items:center}
+.chip:hover{background:var(--card2)}
+.chip.activo{background:#2f2a20;border-color:#6e5420;color:#ffd38a}
+.chip svg{width:16px;height:16px}
+.hint{color:var(--muted);font-size:13px}
+aside{display:flex;flex-direction:column;gap:16px;min-height:0;overflow:auto;padding-right:2px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:18px}
+.card h3{margin:0 0 12px;font-size:14px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.8px}
+.lamp-head{display:flex;align-items:center;gap:14px}
+.lamp-icon{width:52px;height:52px;border-radius:16px;display:grid;place-items:center;background:var(--card2);transition:.3s}
+.lamp-icon svg{width:28px;height:28px}
+.lamp-head h2{margin:0;font-size:19px;font-weight:650}
+.via{font-size:12.5px;color:var(--muted);margin-top:2px;display:flex;align-items:center;gap:6px}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--muted)}
+.dot.local{background:var(--ok)} .dot.nube{background:var(--warn)} .dot.demo{background:#7fd1ff} .dot.off{background:var(--err)}
+.switch{position:relative;width:58px;height:32px;flex:none;margin-left:auto}
+.switch input{opacity:0;width:0;height:0}
+.switch span{position:absolute;inset:0;border-radius:999px;background:#3a3443;transition:.25s}
+.switch span::before{content:"";position:absolute;width:26px;height:26px;left:3px;top:3px;border-radius:50%;background:#fff;transition:.25s;box-shadow:0 2px 6px rgba(0,0,0,.35)}
+.switch input:checked+span{background:linear-gradient(90deg,var(--accent2),var(--accent))}
+.switch input:checked+span::before{transform:translateX(26px)}
+.ctl{margin-top:18px}
+.ctl-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;font-size:14px}
+.ctl-head b{font-weight:600}
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:14px;border-radius:999px;outline:none;background:#3a3443}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:26px;height:26px;border-radius:50%;background:#fff;border:0;
+  box-shadow:0 2px 10px rgba(0,0,0,.45);cursor:grab}
+input.brillo{background:linear-gradient(90deg,#2a2530,#ffe2a8)}
+input.tono{background:linear-gradient(90deg,#ff9f4a,#ffe9cf 50%,#d6e6ff)}
+input.alcance{background:linear-gradient(90deg,#2a2530,#7fd1ff)}
+.swatches{display:flex;flex-wrap:wrap;gap:10px}
+.sw{width:34px;height:34px;border-radius:50%;border:2px solid rgba(255,255,255,.15);transition:transform .12s}
+.sw:hover{transform:scale(1.12)}
+.sw.mas{display:grid;place-items:center;background:conic-gradient(red,yellow,lime,cyan,blue,magenta,red);position:relative;overflow:hidden}
+.sw.mas input{position:absolute;inset:0;opacity:0;cursor:pointer}
+.vacio{text-align:center;color:var(--muted);padding:14px 4px}
+.vacio svg{width:44px;height:44px;opacity:.6;margin-bottom:6px}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.tile{position:relative;border:1px solid var(--line);background:var(--card2);border-radius:16px;padding:14px 6px 11px;display:flex;flex-direction:column;
+  align-items:center;gap:7px;font-size:13.5px;transition:.15s}
+.tile:hover{border-color:#4a4256;transform:translateY(-1px)}
+.tile .ic{width:38px;height:38px;border-radius:12px;display:grid;place-items:center}
+.tile .ic svg{width:22px;height:22px}
+.tile .x{position:absolute;top:4px;right:6px;font-size:14px;color:var(--muted);display:none;border:0;background:none}
+.tile:hover .x{display:block}
+.fila{display:flex;gap:10px}
+.fila .chip{flex:1;justify-content:center}
+.overlay{position:fixed;inset:0;background:rgba(8,7,10,.72);backdrop-filter:blur(8px);display:none;place-items:center;z-index:20;padding:20px}
+.overlay.abierto{display:grid}
+.modal{width:min(720px,100%);max-height:100%;overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:24px;padding:28px}
+.modal h2{margin:0 0 6px;font-size:24px}
+.modal p{color:#cfc7d8;line-height:1.5}
+.pasos{counter-reset:p;list-style:none;padding:0;margin:16px 0}
+.pasos li{counter-increment:p;position:relative;padding:8px 0 8px 44px;line-height:1.45;color:#ddd5e4}
+.pasos li::before{content:counter(p);position:absolute;left:0;top:6px;width:30px;height:30px;border-radius:50%;background:var(--card2);
+  display:grid;place-items:center;font-weight:600;color:var(--accent)}
+.pasos b{color:#fff}
+label.campo{display:block;margin:12px 0 0;font-size:14px;color:var(--muted)}
+label.campo input,label.campo select{display:block;width:100%;margin-top:6px;padding:11px 13px;border-radius:12px;border:1px solid var(--line);
+  background:#15131a;outline:none}
+label.campo input:focus{border-color:#6e5420}
+.acciones{display:flex;gap:12px;margin-top:22px;flex-wrap:wrap;align-items:center}
+.btn{border:0;padding:12px 20px;border-radius:14px;font-weight:600;background:var(--card2);border:1px solid var(--line)}
+.btn.prim{background:linear-gradient(90deg,var(--accent2),var(--accent));color:#1b1408;border:0}
+.btn:disabled{opacity:.6;cursor:wait}
+.msg{margin-top:14px;min-height:20px;font-size:14px}
+.msg.err{color:var(--err)}
+#toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%) translateY(20px);background:#2a2532;border:1px solid var(--line);
+  padding:11px 18px;border-radius:14px;opacity:0;transition:.25s;pointer-events:none;max-width:80%;z-index:30}
+#toast.ver{opacity:1;transform:translateX(-50%)}
+#toast.err{border-color:#6b2a2a;background:#2e1c1f}
+.ajuste{display:flex;align-items:center;gap:14px;padding:14px 0;border-top:1px solid var(--line)}
+.ajuste:first-of-type{border-top:0}
+.ajuste .t{flex:1}
+.ajuste .t small{display:block;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="logo"><svg viewBox="0 0 24 24" fill="#2a1a05"><path d="M12 2a7 7 0 0 0-4 12.74V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.26A7 7 0 0 0 12 2Zm-3 18h6v1a1 1 0 0 1-1 1h-4a1 1 0 0 1-1-1Z"/></svg></div>
+    <div class="title"><span id="saludo">Hola</span><small id="sala">Mi cuarto</small></div>
+    <div class="spacer"></div>
+    <button class="iconbtn" id="btn-actualizar" title="Volver a leer cómo están las luces">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>Actualizar</button>
+    <button class="iconbtn" id="btn-ajustes">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg>Ajustes</button>
+  </header>
+  <main>
+    <section class="stage">
+      <div id="escena">
+        <canvas id="tres"></canvas>
+        <div id="marcas"></div>
+        <div id="sin3d">Esta computadora no pudo mostrar el cuarto en 3D (WebGL).<br>Las luces se manejan igual desde el panel de la derecha.</div>
+      </div>
+      <div class="chipbar">
+        <button class="chip" id="btn-on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>Encender todas</button>
+        <button class="chip" id="btn-off"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v9M6.3 7.3a8 8 0 1 0 11.4 0"/></svg>Apagar todas</button>
+        <span class="spacer"></span>
+        <span class="hint" id="hint-escena">Toca una luz para manejarla · arrastra el cuarto para girarlo</span>
+        <button class="chip" id="btn-mover"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2v20M2 12h20M12 2l-3 3M12 2l3 3M12 22l-3-3M12 22l3-3M2 12l3-3M2 12l3 3M22 12l-3-3M22 12l-3 3"/></svg>Ubicar luces</button>
+      </div>
+    </section>
+    <aside>
+      <div class="card" id="panel"></div>
+      <div class="card">
+        <h3>Escenas</h3>
+        <div class="grid" id="escenas"></div>
+      </div>
+    </aside>
+  </main>
+</div>
+
+<div class="overlay" id="bienvenida"><div class="modal">
+  <h2>Conectemos tus luces</h2>
+  <p>Smart Life no deja que otros programas manejen las luces sin permiso. Ese permiso se crea
+    <b>gratis y una sola vez</b> en la página de Tuya, la empresa que hace Smart Life. Son unos 10 minutos.</p>
+  <ol class="pasos">
+    <li>Entra a <a href="https://platform.tuya.com" target="_blank" style="color:var(--accent)">platform.tuya.com</a> y crea una cuenta.</li>
+    <li>Arriba: <b>Cloud → Development → Create Cloud Project</b>. Industry y Development Method: <b>Smart Home</b>.
+      Data Center: <b>Western America</b> (Latinoamérica).</li>
+    <li>En la pantalla de servicios que aparece, deja los que vienen marcados y confirma.</li>
+    <li>En el proyecto: <b>Devices → Link App Account → Add App Account</b>. Aparece un código QR.</li>
+    <li>En el celular, en <b>Smart Life</b>: pestaña <b>Yo</b> → ícono de escanear (arriba a la derecha) → escanea el QR → Confirmar.</li>
+    <li>En <b>Overview</b> copia el <b>Access ID</b> y el <b>Access Secret</b> y pégalos aquí:</li>
+  </ol>
+  <label class="campo">Access ID<input id="f-key" autocomplete="off" spellcheck="false"></label>
+  <label class="campo">Access Secret<input id="f-secret" type="password" autocomplete="off" spellcheck="false"></label>
+  <label class="campo">Región<select id="f-region"></select></label>
+  <div class="msg" id="f-msg"></div>
+  <div class="acciones">
+    <button class="btn prim" id="f-conectar">Conectar mis luces</button>
+    <button class="btn" id="f-demo">Ver el cuarto en modo prueba</button>
+    <button class="btn" id="f-cerrar" style="display:none">Cerrar</button>
+  </div>
+</div></div>
+
+<div class="overlay" id="ajustes"><div class="modal">
+  <h2>Ajustes</h2>
+  <div class="ajuste"><div class="t">Cuenta de Smart Life<small id="a-cuenta">—</small></div>
+    <button class="btn" id="a-conectar">Conectar de nuevo</button></div>
+  <div class="ajuste"><div class="t">Vista del cuarto<small>Arrastra con el mouse para girar y usa la rueda para acercar. Doble clic en el cuarto vuelve a la vista inicial.</small></div>
+    <button class="btn" id="a-vista">Vista inicial</button></div>
+  <div class="ajuste"><div class="t">Modo prueba<small>Luces de mentira para probar el programa sin tocar las de verdad.</small></div>
+    <label class="switch"><input type="checkbox" id="a-demo"><span></span></label></div>
+  <div class="ajuste"><div class="t">Buscar las luces en el WiFi<small>Si una luz dice «por internet» o «sin conexión».</small></div>
+    <button class="btn" id="a-buscar">Buscar</button></div>
+  <div class="acciones"><button class="btn prim" id="a-cerrar">Listo</button></div>
+</div></div>
+
+<div id="toast"></div>
+
+<script type="importmap">{"imports":{"three":"/recursos/three/three.module.min.js","three/addons/":"/recursos/three/addons/"}}</script>
+<script type="module">
+import { crearCuarto } from "/recursos/cuarto3d.js";
+const TOKEN = "{{TOKEN}}";
+const $ = s => document.querySelector(s);
+const ICON = {
+  bulb:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a7 7 0 0 0-4 12.74V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.26A7 7 0 0 0 12 2Zm-3 18h6v1a1 1 0 0 1-1 1h-4a1 1 0 0 1-1-1Z"/></svg>',
+  tira:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M3 12h18"/><circle cx="6" cy="12" r="1.4" fill="currentColor"/><circle cx="12" cy="12" r="1.4" fill="currentColor"/><circle cx="18" cy="12" r="1.4" fill="currentColor"/><path d="M6 7v1M12 6v2M18 7v1M6 16v1M12 16v2M18 16v1"/></svg>',
+  enchufe:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0Z M12 18v4"/></svg>',
+  techo:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2v5"/><path d="M5 14a7 7 0 0 1 14 0Z" fill="currentColor"/><path d="M9 17.5a3 3 0 0 0 6 0"/></svg>',
+};
+const SCENE_ICON = {
+  "cine":['#3a2440','#ff7aa2','<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M3 7l3-4h4L7 7M10 7l3-4h4l-3 4"/></svg>'],
+  "relax":['#1f3a2e','#6fe0a0','<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 19c9 0 14-6 14-14C11 5 5 10 5 19Z"/><path d="M5 19l7-7"/></svg>'],
+  "lectura":['#2b2f45','#8fb4ff','<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 6c-2-1.5-5-2-8-2v14c3 0 6 .5 8 2 2-1.5 5-2 8-2V4c-3 0-6 .5-8 2Z"/><path d="M12 6v14"/></svg>'],
+  "dia":['#40361b','#ffd257','<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>'],
+  "noche":['#272840','#b6a8ff','<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5Z"/></svg>'],
+  "fiesta":['#3d2238','#ff8be0','<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 20l5-13 8 8Z"/><path d="M14 4v2M19 9h2M17 6l1.5-1.5M11 3l.5 1.5"/></svg>'],
+  "_propia":['#2f2a20','#ffb547','<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3l2.6 5.6 6 .6-4.5 4 1.3 6L12 16.3 6.6 19.2l1.3-6-4.5-4 6-.6Z"/></svg>'],
+  "_nueva":['#26222e','#cfc7d8','<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>'],
+};
+const COLORES = [["#ff3b30",0,100],["#ff8a1f",28,100],["#ffd23f",52,100],["#34c759",120,100],["#22d3ee",180,100],
+                 ["#3b6cff",230,100],["#a855f7",275,100],["#ff5fae",325,70]];
+
+let estado = {luces: [], escenas: [], configurado: false, demo: false};
+let sel = null, editando = false, enviando = 0, ultimoEnvio = 0;
+const vis = {};          // luz visible (animada) por id: {r,g,b,k}
+const pendientes = {};   // órdenes por luz mientras se arrastra una barra
+
+// ------------------------------------------------------------------ API
+async function api(path, body, method) {
+  const opts = {method: method || (body !== undefined ? "POST" : "GET"), headers: {"X-Token": TOKEN}};
+  if (body instanceof Blob) { opts.body = body; opts.headers["Content-Type"] = body.type || "application/octet-stream"; }
+  else if (body !== undefined) { opts.body = JSON.stringify(body); opts.headers["Content-Type"] = "application/json"; }
+  const r = await fetch(path, opts);
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || ("Error " + r.status));
+  return d;
+}
+function toast(texto, err) {
+  const t = $("#toast"); t.textContent = texto; t.className = "ver" + (err ? " err" : "");
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.className = "", err ? 6000 : 2600);
+}
+async function cargar() {
+  try {
+    const d = await api("/api/estado");
+    if (Date.now() - ultimoEnvio < 2500 && enviando) return;   // no pisar lo que se está mandando
+    estado = d; pintarTodo();
+  } catch (e) { /* el servidor puede estar ocupado: se reintenta */ }
+}
+
+// ------------------------------------------------------------------ colores de luz
+function hsv(h, s, v) {
+  const f = n => { const k = (n + h / 60) % 6; return v - v * s * Math.max(0, Math.min(k, 4 - k, 1)); };
+  return [f(5) * 255, f(3) * 255, f(1) * 255];
+}
+function blanco(t) {   // 0 = cálida … 100 = fría
+  const c = [[255,150,70],[255,214,165],[220,233,255]], x = Math.max(0, Math.min(100, t == null ? 45 : t)) / 50;
+  const a = c[Math.floor(x)] , b = c[Math.min(2, Math.floor(x) + 1)], f = x - Math.floor(x);
+  return a.map((v, i) => v + (b[i] - v) * f);
+}
+function luzColor(l) {
+  if (!l.encendida) return null;
+  if (l.modo === "color" && l.color) return hsv(l.color[0], l.color[1] / 100, 1);
+  return blanco(l.tono);
+}
+function intensidad(l) { return l.encendida ? 0.16 + 0.84 * Math.pow((l.brillo || 100) / 100, 0.75) : 0; }
+const css = c => c ? `rgb(${c.map(v => Math.round(v)).join(",")})` : "#6d6676";
+
+// ------------------------------------------------------------------ la escena 3D
+const esc = $("#escena");
+let cuarto = null;
+try { cuarto = crearCuarto($("#tres")); window.cuarto3d = cuarto; }
+catch (e) { console.error(e); $("#tres").style.display = "none"; $("#sin3d").style.display = "grid"; }
+function iluminar() {   // las luces del cuarto 3D copian a las reales
+  if (!cuarto) return;
+  cuarto.setLuces(estado.luces.filter(l => l.es_luz && l.pos).map(l => ({id: l.id, pos: l.pos, color: luzColor(l), k: intensidad(l)})));
+}
+if (cuarto) {
+  cuarto.alCuadro(() => {
+    for (const el of document.querySelectorAll("#marcas .marca")) {
+      const p = cuarto.enPantalla(el.dataset.id);
+      if (!p || p.detras) { el.style.display = "none"; continue; }
+      el.style.display = "";
+      const x = Math.max(.04, Math.min(.96, p.x)) * esc.clientWidth, y = Math.max(.07, Math.min(.93, p.y)) * esc.clientHeight;
+      el.style.transform = `translate(${x}px,${y}px) translate(-50%,-50%)`;
+    }
+  });
+  $("#tres").addEventListener("dblclick", () => cuarto.vistaInicial());
+}
+
+// ------------------------------------------------------------------ marcas sobre el dibujo
+function iconoDe(l) { return !l.es_luz ? ICON.enchufe : l.pos && l.pos.forma === "tira" ? ICON.tira : l.pos && l.pos.forma === "techo" ? ICON.techo : ICON.bulb; }
+function pintarMarcas() {
+  const cont = $("#marcas"); cont.innerHTML = "";
+  for (const l of estado.luces) {
+    if (!l.pos) continue;
+    const b = document.createElement("button");
+    const c = luzColor(l);
+    b.className = "marca " + (l.encendida ? "on" : "off") + (l.id === sel ? " sel" : "") + (!l.via ? " sin" : "");
+    b.dataset.id = l.id;
+    if (!l.es_luz) continue;   // los enchufes se manejan desde el panel
+    b.style.setProperty("--glow", c ? css(c) : "transparent");
+    b.innerHTML = `<span class="bola" style="color:${c ? css(c) : "#7d7588"}">${iconoDe(l)}</span><span class="nombre"></span>`;
+    b.querySelector(".nombre").textContent = l.nombre;
+    b.title = editando ? "Arrastra para ubicarla en una pared, el techo o el escritorio" : "Clic: elegir · doble clic: prender/apagar";
+    b.addEventListener("click", e => { if (b._arrastro) return; elegir(l.id); });
+    b.addEventListener("dblclick", () => { if (!editando) mandar(l, {on: !l.encendida}); });
+    if (editando) arrastrable(b, l);
+    cont.appendChild(b);
+  }
+}
+function arrastrable(el, l) {
+  el.addEventListener("pointerdown", e => {
+    if (!cuarto) return;
+    e.preventDefault(); el.setPointerCapture(e.pointerId); el._arrastro = false; sel = l.id;
+    const mover = ev => {
+      const r = esc.getBoundingClientRect();
+      const p = cuarto.superficie((ev.clientX - r.left) / r.width, (ev.clientY - r.top) / r.height);
+      if (!p) return;
+      Object.assign(l.pos, l.pos.forma === "techo" ? {x: p.x, z: p.z} : p); el._arrastro = true; iluminar();
+    };
+    const fin = () => { el.removeEventListener("pointermove", mover); el.removeEventListener("pointerup", fin);
+      if (el._arrastro) guardarPos(l); pintarMarcas(); pintarPanel(); setTimeout(() => el._arrastro = false, 0); };
+    el.addEventListener("pointermove", mover); el.addEventListener("pointerup", fin);
+  });
+}
+let guardarT = {};
+function guardarPos(l) {
+  clearTimeout(guardarT[l.id]);
+  guardarT[l.id] = setTimeout(() => api("/api/posicion", {id: l.id, ...l.pos}).catch(e => toast(e.message, true)), 300);
+}
+
+// ------------------------------------------------------------------ panel de la luz elegida
+function elegir(id, sinPanel) { sel = id; pintarMarcas(); if (!sinPanel || true) pintarPanel(); }
+function pintarPanel() {
+  const p = $("#panel"), l = estado.luces.find(x => x.id === sel);
+  if (!l) {
+    p.innerHTML = `<div class="vacio">${ICON.bulb}<div>${estado.luces.length ? "Toca una luz en el cuarto<br>para manejarla" : "Todavía no hay luces"}</div></div>`;
+    return;
+  }
+  const c = luzColor(l), via = l.via === "local" ? ["local", "Conectada por WiFi"] : l.via === "nube" ? ["nube", "Conectada por internet"]
+    : l.via === "demo" ? ["demo", "Luz de prueba"] : ["off", "Sin conexión" + (l.error ? " · " + l.error.slice(0, 60) : "")];
+  p.innerHTML = `
+    <div class="lamp-head">
+      <div class="lamp-icon" style="color:${c ? css(c) : "#7d7588"};box-shadow:${c ? "0 0 28px " + css(c) + "55" : "none"}">${iconoDe(l)}</div>
+      <div style="min-width:0"><h2></h2><div class="via"><span class="dot ${via[0]}"></span><span class="vt"></span></div></div>
+      <label class="switch"><input type="checkbox" id="p-on" ${l.encendida ? "checked" : ""}><span></span></label>
+    </div>
+    ${l.tiene.brillo ? `<div class="ctl"><div class="ctl-head"><span>Brillo</span><b id="p-bv">${l.brillo ?? "–"}%</b></div>
+      <input type="range" class="brillo" id="p-brillo" min="1" max="100" value="${l.brillo ?? 100}"></div>` : ""}
+    ${l.tiene.tono ? `<div class="ctl"><div class="ctl-head"><span>Tono</span><span class="hint">cálida · fría</span></div>
+      <input type="range" class="tono" id="p-tono" min="0" max="100" value="${l.tono ?? 50}"></div>` : ""}
+    ${l.tiene.color ? `<div class="ctl"><div class="ctl-head"><span>Color</span></div><div class="swatches" id="p-sw"></div></div>` : ""}
+    ${editando && l.es_luz ? `<div class="ctl"><div class="ctl-head"><span>Fuerza de la luz en el cuarto 3D</span></div>
+      <input type="range" class="alcance" id="p-alc" min="20" max="250" value="${Math.round((l.pos.alcance || 1) * 100)}">
+      <div class="chipbar" style="margin-top:12px">${["foco","techo","tira"].map(f =>
+        `<button class="chip ${l.pos.forma === f ? "activo" : ""}" data-forma="${f}">${{foco:"Foco",techo:"Luz de techo",tira:"Tira LED"}[f]}</button>`).join("")}</div></div>` : ""}`;
+  p.querySelector("h2").textContent = l.nombre;
+  p.querySelector(".vt").textContent = via[1];
+  $("#p-on").onchange = e => mandar(l, {on: e.target.checked});
+  const br = $("#p-brillo");
+  if (br) { br.oninput = () => { $("#p-bv").textContent = br.value + "%"; vivo(l, {brillo: +br.value}); }; br.onchange = () => soltar(l); }
+  const to = $("#p-tono");
+  if (to) { to.oninput = () => vivo(l, {tono: +to.value, blanco: true}); to.onchange = () => soltar(l); }
+  const sw = $("#p-sw");
+  if (sw) {
+    if (l.tiene.brillo || l.tiene.tono) { const b = document.createElement("button"); b.className = "sw"; b.title = "Luz blanca";
+      b.style.background = "#fff3df"; b.onclick = () => mandar(l, {blanco: true, brillo: l.brillo || 100}); sw.appendChild(b); }
+    for (const [hex, h, s] of COLORES) { const b = document.createElement("button"); b.className = "sw"; b.style.background = hex;
+      b.onclick = () => mandar(l, {color: [h, s]}); sw.appendChild(b); }
+    const mas = document.createElement("label"); mas.className = "sw mas"; mas.title = "Otro color";
+    mas.innerHTML = '<input type="color" value="#ff8800">';
+    mas.querySelector("input").oninput = e => { const [h, s] = rgb2hs(e.target.value); vivo(l, {color: [h, s]}); };
+    mas.querySelector("input").onchange = () => soltar(l);
+    sw.appendChild(mas);
+  }
+  const alc = $("#p-alc");
+  if (alc) { alc.oninput = () => { l.pos.alcance = alc.value / 100; iluminar(); guardarPos(l); }; }
+  p.querySelectorAll("[data-forma]").forEach(b => b.onclick = () => {
+    const f = b.dataset.forma; Object.assign(l.pos, cuarto ? cuarto.UBICACIONES[f] : {forma: f}); guardarPos(l); pintarTodo(); });
+}
+function rgb2hs(hex) {
+  const n = parseInt(hex.slice(1), 16), r = (n >> 16) / 255, g = (n >> 8 & 255) / 255, b = (n & 255) / 255;
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+  let h = 0; if (d) h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return [Math.round((h * 60 + 360) % 360), Math.round(mx ? d / mx * 100 : 0)];
+}
+
+// ------------------------------------------------------------------ órdenes
+function aplicarLocal(l, o) {   // lo que se ve cambia al instante; después confirma la luz real
+  if ("on" in o) l.encendida = o.on;
+  else if (o.brillo != null || o.tono != null || o.color || o.blanco) l.encendida = true;
+  if (o.color) { l.modo = "color"; l.color = o.color; }
+  if (o.blanco) l.modo = "blanco";
+  if (o.brillo != null) l.brillo = o.brillo;
+  if (o.tono != null) l.tono = o.tono;
+}
+async function mandar(l, o) {
+  aplicarLocal(l, o); pintarMarcas(); pintarPanel(); iluminar();
+  enviando++; ultimoEnvio = Date.now();
+  try { const r = await api("/api/luz/" + encodeURIComponent(l.id), o); Object.assign(l, r.luz); }
+  catch (e) { toast(e.message, true); }
+  finally { enviando--; pintarMarcas(); if (sel === l.id && !document.activeElement?.matches("input[type=range]")) pintarPanel(); iluminar(); }
+}
+function vivo(l, o) {   // mientras se arrastra una barra: se ve en el dibujo y se manda cada tanto
+  aplicarLocal(l, o); iluminar(); pintarMarcas();
+  pendientes[l.id] = Object.assign(pendientes[l.id] || {}, o);
+  if (!vivo.t) vivo.t = setTimeout(() => { vivo.t = null; for (const id in pendientes) { const x = estado.luces.find(z => z.id === id);
+    const ord = pendientes[id]; delete pendientes[id]; if (x) enviarSilencioso(x, ord); } }, 350);
+}
+function soltar(l) { const ord = pendientes[l.id]; delete pendientes[l.id]; if (ord) enviarSilencioso(l, ord); }
+async function enviarSilencioso(l, o) {
+  enviando++; ultimoEnvio = Date.now();
+  try { await api("/api/luz/" + encodeURIComponent(l.id), o); } catch (e) { toast(e.message, true); } finally { enviando--; }
+}
+async function grupo(path, body, texto) {
+  enviando++; ultimoEnvio = Date.now();
+  try { const r = await api(path, body); if (r.estado) { estado = r.estado; pintarTodo(); }
+    if (r.errores && r.errores.length) toast(r.errores.join(" · "), true); else if (texto) toast(texto); }
+  catch (e) { toast(e.message, true); } finally { enviando--; }
+}
+
+// ------------------------------------------------------------------ escenas
+function pintarEscenas() {
+  const g = $("#escenas"); g.innerHTML = "";
+  for (const e of estado.escenas) {
+    const key = e.propia ? "_propia" : e.nombre.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+    const [bg, fg, svg] = SCENE_ICON[key] || SCENE_ICON._propia;
+    const t = document.createElement("button"); t.className = "tile";
+    t.innerHTML = `<span class="ic" style="background:${bg};color:${fg}">${svg}</span><span class="n"></span>${e.propia ? '<span class="x" title="Borrar">✕</span>' : ""}`;
+    t.querySelector(".n").textContent = e.nombre;
+    t.onclick = ev => { if (ev.target.classList.contains("x")) { if (confirm(`¿Borrar la escena «${e.nombre}»?`)) grupo("/api/escena/borrar", {nombre: e.nombre}); return; }
+      aplicarEscenaLocal(e); grupo("/api/escena", {nombre: e.nombre}, `Escena «${e.nombre}»`); };
+    g.appendChild(t);
+  }
+  const n = document.createElement("button"); n.className = "tile";
+  const [bg, fg, svg] = SCENE_ICON._nueva;
+  n.innerHTML = `<span class="ic" style="background:${bg};color:${fg}">${svg}</span><span>Guardar actual</span>`;
+  n.onclick = () => { const nombre = prompt("Nombre para la escena (guarda cómo están ahora las luces):"); if (nombre && nombre.trim()) grupo("/api/escena/guardar", {nombre}, "Escena guardada"); };
+  g.appendChild(n);
+}
+function aplicarEscenaLocal(e) {   // anticipa en el dibujo lo que va a pasar
+  if (!e.spec) return;
+  const luces = estado.luces.filter(l => l.es_luz);
+  luces.forEach((l, i) => {
+    const s = e.spec.luces ? e.spec.luces[l.id] : e.spec; if (!s) return;
+    if (s.on === false) return aplicarLocal(l, {on: false});
+    if (s.modo === "fiesta") return aplicarLocal(l, {color: [Math.round(i * 360 / luces.length), 100], brillo: s.brillo});
+    if (s.modo === "color") return aplicarLocal(l, {color: s.color, brillo: s.brillo});
+    aplicarLocal(l, {blanco: true, brillo: s.brillo, tono: s.tono});
+  });
+  pintarMarcas(); pintarPanel(); iluminar();
+}
+
+// ------------------------------------------------------------------ todo junto
+function saludo() {
+  const h = new Date().getHours();
+  $("#saludo").textContent = h < 6 ? "Buenas noches" : h < 13 ? "Buen día" : h < 20 ? "Buenas tardes" : "Buenas noches";
+}
+function pintarTodo() {
+  const unica = estado.luces.filter(l => l.es_luz).length <= 1;   // en este cuarto: sólo la luz del techo
+  const la = estado.luces.find(l => l.es_luz);
+  $("#btn-on").innerHTML = $("#btn-on").innerHTML.replace(/Encender todas|Prender la luz/, unica ? "Prender la luz" : "Encender todas");
+  $("#btn-off").innerHTML = $("#btn-off").innerHTML.replace(/Apagar todas|Apagar la luz/, unica ? "Apagar la luz" : "Apagar todas");
+  $("#btn-on").classList.toggle("activo", !!(unica && la && la.encendida));
+  $("#btn-mover").style.display = unica ? "none" : "";
+  if (unica) editando = false;
+  $("#sala").textContent = (estado.demo ? "Modo prueba · " : "") + "Mi cuarto";
+  esc.classList.toggle("editando", editando);
+  $("#btn-mover").classList.toggle("activo", editando);
+  $("#hint-escena").textContent = editando ? "Arrastra cada luz a su lugar (pared, techo o escritorio)"
+    : unica ? "Arrastra el cuarto para girarlo · doble clic: vista inicial" : "Toca una luz para manejarla · arrastra el cuarto para girarlo";
+  if (sel && !estado.luces.some(l => l.id === sel)) sel = null;
+  if (!sel) { const primera = estado.luces.find(l => l.es_luz); if (primera) sel = primera.id; }
+  pintarMarcas(); pintarPanel(); pintarEscenas(); iluminar();
+  $("#a-cuenta").textContent = estado.configurado ? `Conectada · región ${estado.region || "?"} · ${estado.luces.length} dispositivos`
+    : "Sin conectar";
+  $("#a-demo").checked = !!estado.demo;
+}
+
+// ------------------------------------------------------------------ botones y ventanas
+$("#btn-on").onclick = () => { estado.luces.filter(l => l.es_luz).forEach(l => aplicarLocal(l, {on: true})); pintarTodo(); grupo("/api/todas", {on: true}); };
+$("#btn-off").onclick = () => { estado.luces.filter(l => l.es_luz).forEach(l => aplicarLocal(l, {on: false})); pintarTodo(); grupo("/api/todas", {on: false}); };
+$("#btn-actualizar").onclick = () => { toast("Leyendo las luces…"); grupo("/api/actualizar", {red: false}, "Listo"); };
+$("#btn-mover").onclick = () => { editando = !editando; pintarTodo(); };
+$("#btn-ajustes").onclick = () => $("#ajustes").classList.add("abierto");
+$("#a-cerrar").onclick = () => $("#ajustes").classList.remove("abierto");
+$("#a-conectar").onclick = () => { $("#ajustes").classList.remove("abierto"); abrirBienvenida(true); };
+$("#a-demo").onchange = e => grupo("/api/demo", {on: e.target.checked}, e.target.checked ? "Modo prueba: luces de mentira" : "Luces de verdad");
+$("#a-buscar").onclick = () => { toast("Buscando en el WiFi (unos segundos)…"); grupo("/api/actualizar", {red: true}, "Búsqueda terminada"); };
+$("#a-vista").onclick = () => { if (cuarto) cuarto.vistaInicial(); $("#ajustes").classList.remove("abierto"); };
+
+function abrirBienvenida(cerrable) {
+  $("#bienvenida").classList.add("abierto");
+  $("#f-cerrar").style.display = cerrable ? "" : "none";
+}
+$("#f-cerrar").onclick = () => $("#bienvenida").classList.remove("abierto");
+$("#f-demo").onclick = async () => { await grupo("/api/demo", {on: true}, "Modo prueba: luces de mentira"); $("#bienvenida").classList.remove("abierto"); };
+$("#f-conectar").onclick = async () => {
+  const b = $("#f-conectar"), m = $("#f-msg"); b.disabled = true; m.className = "msg"; m.textContent = "Conectando…";
+  try {
+    await api("/api/conectar", {key: $("#f-key").value, secret: $("#f-secret").value, region: $("#f-region").value});
+    for (;;) {
+      await new Promise(r => setTimeout(r, 700));
+      const t = await api("/api/trabajo");
+      m.textContent = t.mensaje || "";
+      if (t.estado === "error") { m.className = "msg err"; break; }
+      if (t.estado === "listo") { $("#bienvenida").classList.remove("abierto"); toast(t.mensaje); await cargar(); break; }
+    }
+  } catch (e) { m.className = "msg err"; m.textContent = e.message; }
+  b.disabled = false;
+};
+
+async function inicio() {
+  saludo(); setInterval(saludo, 60000);
+  try {
+    const d = await api("/api/estado"); estado = d;
+    $("#f-region").innerHTML = d.regiones.map(([v, t]) => `<option value="${v}">${t}</option>`).join("");
+    pintarTodo();
+    if (!d.configurado && !d.demo) abrirBienvenida(false);
+  } catch (e) { toast("No se pudo hablar con el programa: " + e.message, true); }
+  setInterval(cargar, 4000);
+  setInterval(() => api("/api/latido", {}).catch(() => {}), 3000);
+}
+inicio();
+</script>
+</body>
+</html>
