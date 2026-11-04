@@ -1,0 +1,11 @@
+<Bindings>
+	<Binding name="MODOFOTO_TOGGLE" header="MODOFOTO" category="ADDONS">
+		ModoFoto_Toggle()
+	</Binding>
+	<Binding name="MODOFOTO_SHOT" category="ADDONS">
+		ModoFoto_ShotNow()
+	</Binding>
+	<Binding name="MODOFOTO_TIMER" category="ADDONS">
+		ModoFoto_ShotWithTimer()
+	</Binding>
+</Bindings>
