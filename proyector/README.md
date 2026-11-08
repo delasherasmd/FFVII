@@ -54,6 +54,20 @@ En Mac o Linux: `python3 proyectar.py` (para los modos Compatible y Pantalla hac
 informe con cada equipo y lo que sabe hacer: DLNA, Chromecast, AirPlay, Android con ADB por red,
 Miracast. El informe queda en el escritorio (`informe_proyector.txt`) y copiado en el portapapeles.
 
+## Copia de seguridad del proyector (Android)
+
+`RespaldoProyector.exe` (o `python respaldo_proyector.py`, que necesita `pip install adb-shell`)
+se conecta al proyector por WiFi con ADB y **sólo lee**: no instala, no borra ni cambia ajustes.
+Guarda en el escritorio una carpeta «Respaldo proyector …» con:
+
+* `INFORME.txt`: marca, modelo, versión de Android, chip, pantalla de inicio actual, apps instaladas
+  y programas del fabricante.
+* `apps/`: copia de la pantalla de inicio original y de las apps instaladas (archivos `.apk`).
+* La lista completa de programas y los ajustes del sistema (archivos `.txt`).
+
+Requisitos: en el proyector, *Opciones de desarrollador → Depuración USB* (y *Depuración por red* si
+aparece). La primera vez el proyector pregunta «¿Permitir depuración?»: marca «Permitir siempre» y acepta.
+
 ## Si algo no funciona
 
 | Problema | Solución |

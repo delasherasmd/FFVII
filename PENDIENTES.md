@@ -2,6 +2,7 @@
 
 - [x] **Proyectar películas de la PC al proyector por WiFi**: listo, en [`proyector/`](proyector/).
   - [ ] Identificar el proyector con `IdentificarProyector.exe` y adaptar el programa a ese modelo.
+  - [ ] Copia de seguridad del proyector con `RespaldoProyector.exe` (antes de tocar nada).
   - [ ] Pantalla de inicio del proyector sin publicidad, con menú tipo Netflix (depende del sistema que tenga).
 
 - [x] **Controlar la luz del techo (Smart Life) desde la PC**: listo, en [`luces/`](luces/), con el cuarto en 3D.
