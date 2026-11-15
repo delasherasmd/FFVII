@@ -7,9 +7,9 @@ local ROW_HEIGHT = 24
 local WIDTH, HEIGHT = 600, 470
 
 local STATUS_ICONS = {
-	done = "|TInterface\\RaidFrame\\ReadyCheck-Ready:14:14|t",
-	log = "|TInterface\\AddOns\\Questie\\Icons\\incomplete.blp:14:14|t",
-	todo = "|TInterface\\AddOns\\Questie\\Icons\\available.blp:14:14|t",
+	done = "|TInterface\\RaidFrame\\ReadyCheck-Ready:18:18|t",
+	log = "|TInterface\\AddOns\\Questie\\Icons\\incomplete.blp:18:18|t",
+	todo = "|TInterface\\AddOns\\Questie\\Icons\\available.blp:18:18|t",
 }
 
 local function ItemIcons(step, limit)
@@ -21,7 +21,7 @@ local function ItemIcons(step, limit)
 		end
 		local fileId = QR.Data.ItemIcon(item.itemId)
 		if fileId then
-			icons[#icons + 1] = format("|T%s:18:18:0:0:64:64:5:59:5:59|t", fileId)
+			icons[#icons + 1] = format("|T%s:22:22:0:0:64:64:5:59:5:59|t", fileId)
 		end
 	end
 	return table.concat(icons, "")
@@ -55,7 +55,7 @@ local function ShowStepTooltip(row)
 				r, g, b = color.r, color.g, color.b
 			end
 			local fileId = D.ItemIcon(item.itemId)
-			local icon = fileId and format("|T%s:14:14|t ", fileId) or ""
+			local icon = fileId and format("|T%s:16:16|t ", fileId) or ""
 			GameTooltip:AddDoubleLine(icon .. D.ItemName(item.itemId),
 				item.upgrade and "|cff20ff20mejora tu equipo|r" or "", r, g, b, 1, 1, 1)
 		end

@@ -17,7 +17,7 @@ end
 --- Texto corto para el seguimiento: puntaje, íconos y la mejora de equipo.
 function Tracker.BadgeText(result)
 	local parts = { format("|cff%s%d|r", ScoreHex(result.score), result.score) }
-	local icons = QR.TagIcons(result, 12)
+	local icons = QR.TagIcons(result, 14)
 	if icons ~= "" then
 		parts[#parts + 1] = icons
 	end

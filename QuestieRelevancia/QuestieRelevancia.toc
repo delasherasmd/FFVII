@@ -1,7 +1,7 @@
 ## Interface: 16001, 11508, 11509
 ## Title: Questie Relevancia
 ## Notes: Ordena tus misiones por relevancia y prioridad (historia, XP, oro, equipo, mazmorras y misiones de clase), con puntaje de 0 a 100 también en la barra de seguimiento de Questie. Usa los datos de Questie.
-## Version: 1.1.0
+## Version: 1.1.1
 ## Dependencies: Questie, QuestieDB
 ## SavedVariables: QuestieRelevanciaDB
 

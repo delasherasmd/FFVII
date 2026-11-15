@@ -6,9 +6,10 @@ local ROWS = 14
 local ROW_HEIGHT = 22
 local WIDTH, HEIGHT = 760, 540
 local LIST_TOP = -136
+local ICON_SIZE = 20 -- íconos de las misiones en la ventana
 
 local function Icon(path, size)
-	size = size or 16
+	size = size or ICON_SIZE
 	return format("|T%s:%d:%d:0:0:64:64:5:59:5:59|t", path, size, size)
 end
 
@@ -25,15 +26,15 @@ local ICONS = {
 	equipo = Icon(ICON_PATHS.equipo),
 	mazmorra = Icon(ICON_PATHS.mazmorra),
 	relleno = "|cff808080relleno|r",
-	entregar = "|TInterface\\AddOns\\Questie\\Icons\\complete.blp:16:16|t",
+	entregar = "|TInterface\\AddOns\\Questie\\Icons\\complete.blp:20:20|t",
 }
 QR.ICONS = ICONS
 
 local STATUS_ICONS = {
-	available = "|TInterface\\AddOns\\Questie\\Icons\\available.blp:14:14|t",
-	blocked = "|TInterface\\AddOns\\Questie\\Icons\\available_gray.blp:14:14|t",
-	log = "|TInterface\\AddOns\\Questie\\Icons\\incomplete.blp:14:14|t",
-	done = "|TInterface\\RaidFrame\\ReadyCheck-Ready:14:14|t",
+	available = "|TInterface\\AddOns\\Questie\\Icons\\available.blp:18:18|t",
+	blocked = "|TInterface\\AddOns\\Questie\\Icons\\available_gray.blp:18:18|t",
+	log = "|TInterface\\AddOns\\Questie\\Icons\\incomplete.blp:18:18|t",
+	done = "|TInterface\\RaidFrame\\ReadyCheck-Ready:18:18|t",
 }
 local STATUS_TEXT = {
 	available = "Disponible", blocked = "Todavía no disponible", log = "En tu registro", done = "Ya la hiciste",
@@ -44,7 +45,7 @@ local function ClassIcon(classFile, size)
 	if not coords then
 		return "|cffffd100C|r"
 	end
-	size = size or 16
+	size = size or ICON_SIZE
 	return format("|TInterface\\WorldStateFrame\\Icons-Classes:%d:%d:0:0:256:256:%d:%d:%d:%d|t",
 		size, size, coords[1] * 256, coords[2] * 256, coords[3] * 256, coords[4] * 256)
 end
@@ -131,9 +132,9 @@ function QR.Money(copper)
 	return table.concat(parts, " ")
 end
 
---- Íconos de las categorías de una misión. size: 16 en la ventana, 12 en el seguimiento.
+--- Íconos de las categorías de una misión. size: 20 en la ventana, 14 en el seguimiento.
 function QR.TagIcons(result, size)
-	size = size or 16
+	size = size or ICON_SIZE
 	local function I(key)
 		return ICON_PATHS[key] and Icon(ICON_PATHS[key], size) or ICONS[key]
 	end
@@ -245,9 +246,9 @@ local function GearTooltip(owner, row)
 		GameTooltip:Show()
 		return
 	end
-	GameTooltip:AddLine("Llevás: " .. ItemText(row.item and row.item.itemId, row.have, 14), 1, 1, 1)
+	GameTooltip:AddLine("Llevás: " .. ItemText(row.item and row.item.itemId, row.have, 16), 1, 1, 1)
 	if row.ideal then
-		GameTooltip:AddLine("Ideal de misión: " .. ItemText(row.ideal.itemId, row.ideal.itemLevel, 14), 1, 1, 1)
+		GameTooltip:AddLine("Ideal de misión: " .. ItemText(row.ideal.itemId, row.ideal.itemLevel, 16), 1, 1, 1)
 		if row.unknown then
 			GameTooltip:AddLine("Todavía no cargó el nivel de lo que llevás.", 0.8, 0.8, 0.8)
 		elseif row.gain and row.gain > 0 then
@@ -301,14 +302,14 @@ local function CreateRow(parent, index)
 	row.score:SetWidth(44)
 	row.score:SetJustifyH("RIGHT")
 
-	row.icons = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	row.icons = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
 	row.icons:SetPoint("LEFT", row.score, "RIGHT", 10, 0)
-	row.icons:SetWidth(126)
+	row.icons:SetWidth(150)
 	row.icons:SetJustifyH("LEFT")
 
 	row.name = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 	row.name:SetPoint("LEFT", row.icons, "RIGHT", 6, 0)
-	row.name:SetWidth(290)
+	row.name:SetWidth(266)
 	row.name:SetJustifyH("LEFT")
 	row.name:SetWordWrap(false)
 
@@ -418,14 +419,14 @@ local function SetGearRow(row, gearRow)
 	end
 	local have = gearRow.item and QR.Data.ItemIcon(gearRow.item.itemId)
 	local ideal = gearRow.ideal and QR.Data.ItemIcon(gearRow.ideal.itemId)
-	row.icons:SetText(format("%s %s %s", have and Icon(have, 18) or "", ideal and "|cffaaaaaa>|r" or "",
-		ideal and Icon(ideal, 18) or ""))
-	row.name:SetText(gearRow.name .. ": " .. ItemText(gearRow.item and gearRow.item.itemId, gearRow.have, 14))
+	row.icons:SetText(format("%s %s %s", have and Icon(have, 20) or "", ideal and "|cffaaaaaa>|r" or "",
+		ideal and Icon(ideal, 20) or ""))
+	row.name:SetText(gearRow.name .. ": " .. ItemText(gearRow.item and gearRow.item.itemId, gearRow.have, 16))
 	row.name:SetTextColor(1, 1, 1)
 	if gearRow.notApplicable then
 		row.zone:SetText("|cff808080no aplica (dos manos)|r")
 	elseif gearRow.ideal then
-		row.zone:SetText(ItemText(gearRow.ideal.itemId, gearRow.ideal.itemLevel, 14))
+		row.zone:SetText(ItemText(gearRow.ideal.itemId, gearRow.ideal.itemLevel, 16))
 	else
 		row.zone:SetText("|cff808080sin premio de misión|r")
 	end
@@ -551,7 +552,7 @@ function QR.CreateWindow()
 		frame.headers[#frame.headers + 1] = header
 		return header
 	end
-	Header(22); Header(76); Header(208); Header(504); Header(-44, true)
+	Header(22); Header(76); Header(232); Header(504); Header(-44, true)
 
 	-- Lista
 	frame.rows = {}
@@ -669,11 +670,11 @@ function QR.CreateWindow()
 		for _, filter in ipairs(CATEGORY_FILTERS) do
 			local text = filter.label
 			if filter.key == "clase" then
-				text = ClassIcon(select(2, UnitClass("player")), 14) .. " " .. filter.label
+				text = ClassIcon(select(2, UnitClass("player")), 16) .. " " .. filter.label
 			elseif filter.key == "xp" then
 				text = ICONS.xp
 			elseif ICON_PATHS[filter.key] then
-				text = Icon(ICON_PATHS[filter.key], 14) .. " " .. filter.label
+				text = Icon(ICON_PATHS[filter.key], 16) .. " " .. filter.label
 			end
 			categoryDefs[#categoryDefs + 1] = { key = filter.key, text = text }
 		end
