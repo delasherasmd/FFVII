@@ -32,12 +32,34 @@ S.LABELS = {
 }
 
 local PRIORITY = {
-	grey = 0.35,   -- ya no da casi nada
 	green = 0.9,
 	yellow = 1.0,
 	orange = 0.95,
-	red = 0.55,    -- todavía muy difícil
 }
+
+--- Prioridad según el nivel de la misión comparado con el tuyo. Una sola fórmula
+--- para misiones sueltas y cadenas: muy por encima de tu nivel tiende a cero.
+--- Las grises casi no valen, salvo las de clase, mazmorra o las que desbloquean
+--- algo, que valen la mitad.
+local function LevelFactor(questLevel, difficulty, ctx, special)
+	if difficulty == "grey" then
+		return special and 0.5 or 0.25
+	end
+	local diff = questLevel - ctx.level
+	if diff >= 5 then
+		return max(0.02, 0.55 * math.exp(-(diff - 5) / 2.5))
+	end
+	return PRIORITY[difficulty]
+end
+
+--- Por encima de 70 el puntaje se comprime suavemente y nunca llega a 100,
+--- así las mejores misiones no quedan amontonadas empatadas arriba de todo.
+local function Compress(value)
+	if value <= 0.7 then
+		return value
+	end
+	return 0.7 + 0.3 * (1 - math.exp(-(value - 0.7) / 0.3))
+end
 
 -- Huecos de equipo donde puede ir cada tipo de objeto.
 local SLOTS = {
@@ -158,12 +180,20 @@ function S.GearUpgrade(itemId, ctx)
 	end
 
 	local itemLevel = D.Item(itemId, "itemLevel") or 0
-	local worst, worstSlot = math.huge, slots[1]
+	local worst, worstSlot = math.huge, nil
 	for _, slot in ipairs(slots) do
-		local equipped = ctx.equipped[slot] or 0
-		if equipped < worst then
-			worst, worstSlot = equipped, slot
+		-- false: hay algo puesto pero el juego todavía no cargó sus datos.
+		-- No se inventan mejoras para esa ranura.
+		local equipped = ctx.equipped[slot]
+		if equipped ~= false then
+			equipped = equipped or 0
+			if equipped < worst then
+				worst, worstSlot = equipped, slot
+			end
 		end
+	end
+	if not worstSlot then
+		return 0
 	end
 
 	local gain = itemLevel - worst
@@ -331,13 +361,14 @@ function S.Evaluate(questId, ctx, inLog)
 	local difficulty = S.Difficulty(own.questLevel, ctx)
 	local zone = D.QuestZone(questId)
 	local sameZone = zone ~= nil and D.SameZone(zone, ctx.zone)
-	local multiplier = PRIORITY[difficulty]
+	local special = parts.clase > 0 or parts.mazmorra > 0 or total > step
+	local multiplier = LevelFactor(own.questLevel, difficulty, ctx, special)
 	if inLog and sameZone then
 		multiplier = multiplier * 1.1
 	end
 
 	local complete = inLog and D.IsComplete(questId) or 0
-	local value = Clamp(base * multiplier)
+	local value = Clamp(Compress(base * multiplier))
 	if complete == 1 then
 		value = 0.9 + 0.1 * base -- lista para entregar: arriba de todo
 	elseif complete == -1 then
@@ -393,7 +424,10 @@ function S.Sort(list)
 		if a.level ~= b.level then
 			return a.level < b.level
 		end
-		return (a.name or "") < (b.name or "")
+		if a.name ~= b.name then
+			return (a.name or "") < (b.name or "")
+		end
+		return a.id < b.id -- desempate fijo: el orden no cambia entre una vez y otra
 	end)
 	return list
 end

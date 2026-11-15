@@ -8,6 +8,8 @@ local Index = {
 	predecessors = {}, -- questId -> {questId = true}: misiones previas (sin las de "aviso")
 	breadcrumbFor = {},-- questId de aviso -> misión a la que lleva
 	rewards = {},      -- questId -> {itemId, ...}
+	byZone = {},       -- areaId -> {questId, ...}
+	questIds = {},     -- todas las misiones de la base de datos
 	ready = false,
 	building = false,
 	progress = 0,
@@ -73,6 +75,16 @@ local function IndexQuest(D, questId)
 			AddEdge(Index.predecessors, childId, questId)
 		end
 	end
+
+	local zoneOrSort = D.Quest(questId, "zoneOrSort")
+	if zoneOrSort and zoneOrSort > 0 then
+		local list = Index.byZone[zoneOrSort]
+		if not list then
+			list = {}
+			Index.byZone[zoneOrSort] = list
+		end
+		list[#list + 1] = questId
+	end
 end
 
 local function IndexItem(D, itemId)
@@ -90,7 +102,35 @@ local function IndexItem(D, itemId)
 	end
 end
 
---- Arma el índice en segundo plano, de a poco por cuadro, para no trabar el juego.
+--- Corre un trabajo largo de a poco por cuadro, para no trabar el juego.
+--- work recibe una función Pause() para llamar seguido; onDone(ok, error).
+function Index.RunSliced(work, onDone)
+	local sliceStart = 0
+	local count = 0
+	local function Pause()
+		count = count + 1
+		if count % 20 == 0 and Now() - sliceStart > FRAME_BUDGET_MS then
+			coroutine.yield()
+		end
+	end
+	local worker = coroutine.create(function() work(Pause) end)
+
+	local ticker
+	ticker = C_Timer.NewTicker(0.01, function()
+		sliceStart = Now()
+		local ok, err = coroutine.resume(worker)
+		if not ok then
+			ticker:Cancel()
+			if onDone then onDone(false, tostring(err)) end
+		elseif coroutine.status(worker) == "dead" then
+			ticker:Cancel()
+			if onDone then onDone(true) end
+		end
+	end)
+	return ticker
+end
+
+--- Arma el índice en segundo plano.
 function Index.Build(D, onDone)
 	if Index.ready or Index.building then
 		return
@@ -101,43 +141,31 @@ function Index.Build(D, onDone)
 	local questIds = D.AllQuestIds() or {}
 	local itemIds = D.AllItemIds() or {}
 	local total = math.max(1, #questIds + #itemIds)
+	Index.questIds = questIds
 
-	local sliceStart = 0
-	local worker = coroutine.create(function()
+	Index.RunSliced(function(Pause)
 		local done = 0
-		local function Pause()
-			done = done + 1
-			if done % 20 == 0 and Now() - sliceStart > FRAME_BUDGET_MS then
-				Index.progress = done / total
-				coroutine.yield()
-			end
-		end
 		for i = 1, #questIds do
 			IndexQuest(D, questIds[i])
+			done = done + 1
+			Index.progress = done / total
 			Pause()
 		end
 		for i = 1, #itemIds do
 			IndexItem(D, itemIds[i])
+			done = done + 1
+			Index.progress = done / total
 			Pause()
 		end
-	end)
-
-	local ticker
-	ticker = C_Timer.NewTicker(0.01, function()
-		sliceStart = Now()
-		local ok, err = coroutine.resume(worker)
-		if not ok then
-			ticker:Cancel()
-			Index.building = false
-			Index.error = tostring(err)
-			if onDone then onDone(false) end
-		elseif coroutine.status(worker) == "dead" then
-			ticker:Cancel()
-			Index.building = false
+	end, function(ok, err)
+		Index.building = false
+		if ok then
 			Index.ready = true
 			Index.progress = 1
-			if onDone then onDone(true) end
+		else
+			Index.error = err
 		end
+		if onDone then onDone(ok) end
 	end)
 end
 
@@ -191,12 +219,11 @@ local function Longest(map, cache, questId, accept)
 	return best
 end
 
---- Los próximos pasos de la cadena, siguiendo la rama más larga.
-function Index.NextSteps(questId, limit, accept)
+local function Walk(map, cache, questId, limit, accept)
 	local steps, seen = {}, { [questId] = true }
 	local current = questId
 	while #steps < limit do
-		local nextId = Longest(Index.successors, succDepth, current, accept)
+		local nextId = Longest(map, cache, current, accept)
 		if not nextId or seen[nextId] then
 			break
 		end
@@ -205,4 +232,34 @@ function Index.NextSteps(questId, limit, accept)
 		current = nextId
 	end
 	return steps
+end
+
+--- Los próximos pasos de la cadena, siguiendo la rama más larga.
+function Index.NextSteps(questId, limit, accept)
+	return Walk(Index.successors, succDepth, questId, limit, accept)
+end
+
+--- Los pasos anteriores, del más cercano al primero de la cadena.
+function Index.PreviousSteps(questId, limit, accept)
+	return Walk(Index.predecessors, predDepth, questId, limit, accept)
+end
+
+--- La cadena completa que pasa por esta misión, del primer paso al último.
+function Index.ChainPath(questId, accept)
+	local path, inPath = {}, {}
+	local before = Index.PreviousSteps(questId, MAX_DEPTH, accept)
+	for i = #before, 1, -1 do
+		path[#path + 1] = before[i]
+		inPath[before[i]] = true
+	end
+	path[#path + 1] = questId
+	inPath[questId] = true
+	for _, nextId in ipairs(Index.NextSteps(questId, MAX_DEPTH, accept)) do
+		if inPath[nextId] then
+			break -- datos con ciclos: no repetir pasos
+		end
+		path[#path + 1] = nextId
+		inPath[nextId] = true
+	end
+	return path, #before + 1
 end

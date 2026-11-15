@@ -38,10 +38,14 @@ function D.Init()
 		return false
 	end
 	for _, name in ipairs({ "QuestieDB", "QuestXP", "ZoneDB", "QuestiePlayer", "ActiveQuests",
-		"AvailableQuests", "QuestieCompat", "TrackerUtils" }) do
+		"AvailableQuests", "QuestieCompat", "TrackerUtils", "LineBuilder", "QuestieTracker" }) do
 		modules[name] = Import(name) or {}
 	end
 	return true
+end
+
+function D.Module(name)
+	return modules[name] or {}
 end
 
 function D.IsReady()
@@ -108,13 +112,53 @@ function D.IsTrivial(questLevel)
 	return Try(modules.QuestieDB.IsTrivial, questLevel) == true
 end
 
+-- Misiones cuyas etiquetas se le pueden pedir al juego (las del registro y las
+-- disponibles). Para las demás alcanza con la zona de la base de datos, así no
+-- se le piden datos al servidor por miles de misiones.
+D.tagQuests = {}
+
 function D.IsDungeonQuest(questId)
-	local QuestieDB = modules.QuestieDB
-	if Try(QuestieDB.IsDungeonQuest, questId) or Try(QuestieDB.IsRaidQuest, questId) then
+	local zoneOrSort = D.Quest(questId, "zoneOrSort")
+	if zoneOrSort and zoneOrSort > 0 and Try(modules.ZoneDB.IsDungeonZone, zoneOrSort) == true then
 		return true
 	end
-	local zoneOrSort = D.Quest(questId, "zoneOrSort")
-	return zoneOrSort ~= nil and zoneOrSort > 0 and Try(modules.ZoneDB.IsDungeonZone, zoneOrSort) == true
+	if not D.tagQuests[questId] then
+		return false
+	end
+	local QuestieDB = modules.QuestieDB
+	return (Try(QuestieDB.IsDungeonQuest, questId) or Try(QuestieDB.IsRaidQuest, questId)) == true
+end
+
+-- Zonas que Questie lista con las mazmorras pero no lo son: campos de batalla y el tranvía.
+D.NOT_DUNGEONS = { [2597] = true, [3277] = true, [3358] = true, [2257] = true }
+
+-- Categorías de eventos de temporada, la Feria de la Luna Negra, la guerra de Ahn'Qiraj,
+-- invasiones y campos de batalla.
+local EVENT_SORTS = {
+	[-22] = true, [-25] = true, [-364] = true, [-365] = true, [-366] = true, [-368] = true, [-369] = true,
+	[-370] = true, [-374] = true, [-375] = true, [-376] = true, [-378] = true,
+}
+
+function D.IsRepeatable(questId)
+	return (D.Quest(questId, "specialFlags") or 0) % 2 == 1
+end
+
+--- Misiones de eventos o de campos de batalla: no sirven para medir tu nivel.
+function D.IsEventOrPvP(questId)
+	local zoneOrSort = D.Quest(questId, "zoneOrSort") or 0
+	return EVENT_SORTS[zoneOrSort] == true or D.NOT_DUNGEONS[zoneOrSort] == true
+end
+
+--- Estado de una misión: "log", "available", "done" o "blocked".
+function D.QuestStatus(questId, logSet, availableSet)
+	if logSet[questId] then
+		return "log"
+	elseif D.IsCompleted(questId) then
+		return "done"
+	elseif availableSet[questId] then
+		return "available"
+	end
+	return "blocked"
 end
 
 function D.IsEligible(questId)
@@ -193,17 +237,42 @@ function D.AllClassesMask()
 	return keys and keys.ALL_CLASSES or 1503
 end
 
-function D.EquippedItemLevels()
-	local levels = {}
+--- Lo que llevás puesto, por ranura. itemLevel es nil si todavía no se sabe.
+function D.EquippedItems()
+	local items, any = {}, false
 	for slot = 1, 18 do
 		if slot ~= 4 then -- la camisa no cuenta
-			local link = GetInventoryItemLink("player", slot)
-			if link then
-				local itemLevel = GetDetailedItemLevelInfo and GetDetailedItemLevelInfo(link)
-				if not itemLevel then
-					itemLevel = select(4, GetItemInfo(link))
+			local itemId = GetInventoryItemID("player", slot)
+			if itemId then
+				any = true
+				local link = GetInventoryItemLink("player", slot)
+				local itemLevel = link and GetDetailedItemLevelInfo and GetDetailedItemLevelInfo(link)
+				if not itemLevel or itemLevel <= 1 then
+					-- Al entrar al juego el cliente a veces no tiene los datos todavía:
+					-- se usa la base de datos de Questie.
+					itemLevel = D.Item(itemId, "itemLevel")
 				end
-				levels[slot] = itemLevel or 1
+				items[slot] = { itemId = itemId, link = link, itemLevel = itemLevel,
+					equipLoc = D.ItemEquipInfo(itemId) }
+			end
+		end
+	end
+	-- Sin nada puesto a un nivel avanzado: el equipo todavía no cargó.
+	items.loaded = any or D.PlayerLevel() <= 5
+	return items
+end
+
+--- Nivel de objeto por ranura: un número, nil si está vacía, o false si no se sabe.
+function D.EquippedItemLevels(items)
+	items = items or D.EquippedItems()
+	local levels = {}
+	for slot = 1, 18 do
+		if slot ~= 4 then
+			local item = items[slot]
+			if not items.loaded then
+				levels[slot] = false
+			elseif item then
+				levels[slot] = item.itemLevel or false
 			end
 		end
 	end
@@ -224,6 +293,56 @@ end
 
 function D.ItemSellPrice(itemId)
 	return (select(11, GetItemInfo(itemId)))
+end
+
+function D.ItemIcon(itemId)
+	return (select(5, GetItemInfoInstant(itemId)))
+end
+
+function D.ItemName(itemId)
+	return D.Item(itemId, "name") or (select(1, GetItemInfo(itemId))) or ("#" .. itemId)
+end
+
+function D.ItemQuality(itemId)
+	if C_Item and C_Item.GetItemQualityByID then
+		return Try(C_Item.GetItemQualityByID, itemId)
+	end
+	return (select(3, GetItemInfo(itemId)))
+end
+
+function D.FactionName(factionId)
+	if C_Reputation and C_Reputation.GetFactionDataByID then
+		local data = Try(C_Reputation.GetFactionDataByID, factionId)
+		if data and data.name then
+			return data.name
+		end
+	end
+	if GetFactionInfoByID then
+		local name = Try(GetFactionInfoByID, factionId)
+		if name then
+			return name
+		end
+	end
+	return "#" .. factionId
+end
+
+--- Mazmorras y bandas conocidas por Questie: areaId -> {nombre, otras áreas}.
+function D.Dungeons()
+	local ZoneDB = modules.ZoneDB
+	local dungeons = ZoneDB.GetDungeons and Try(ZoneDB.GetDungeons, ZoneDB)
+	local list = {}
+	for areaId, entry in pairs(dungeons or {}) do
+		if not D.NOT_DUNGEONS[areaId] then
+			local name = ZoneDB.GetLocalizedDungeonName and Try(ZoneDB.GetLocalizedDungeonName, ZoneDB, areaId)
+			list[#list + 1] = {
+				areaId = areaId,
+				name = name or D.ZoneName(areaId) ~= "" and D.ZoneName(areaId) or entry[1] or ("#" .. areaId),
+				areaIds = entry[2] or {},
+				parentZone = entry[3],
+			}
+		end
+	end
+	return list
 end
 
 --------------------------------------------------------------------------------
