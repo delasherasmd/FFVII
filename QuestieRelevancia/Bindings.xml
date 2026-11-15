@@ -1,0 +1,5 @@
+<Bindings>
+	<Binding name="QUESTIERELEVANCIA_TOGGLE" header="QUESTIERELEVANCIA" category="ADDONS">
+		QuestieRelevancia_Toggle()
+	</Binding>
+</Bindings>
