@@ -132,8 +132,9 @@ function QR.Money(copper)
 	return table.concat(parts, " ")
 end
 
---- Íconos de las categorías de una misión. size: 20 en la ventana, 14 en el seguimiento.
-function QR.TagIcons(result, size)
+--- Íconos de las categorías de una misión: de 20 en la ventana; en el seguimiento
+--- de Questie (compact) siguen su tamaño de letra y no llevan el texto "relleno".
+function QR.TagIcons(result, size, compact)
 	size = size or ICON_SIZE
 	local function I(key)
 		return ICON_PATHS[key] and Icon(ICON_PATHS[key], size) or ICONS[key]
@@ -148,7 +149,7 @@ function QR.TagIcons(result, size)
 	if result.tags.equipo then icons[#icons + 1] = I("equipo") end
 	if result.tags.mazmorra then icons[#icons + 1] = I("mazmorra") end
 	if result.tags.clase then icons[#icons + 1] = ClassIcon(QR.context and QR.context.classFile, size) end
-	if result.tags.relleno and #icons == 0 and size >= 16 then icons[#icons + 1] = ICONS.relleno end
+	if result.tags.relleno and #icons == 0 and not compact then icons[#icons + 1] = ICONS.relleno end
 	return table.concat(icons, " ")
 end
 

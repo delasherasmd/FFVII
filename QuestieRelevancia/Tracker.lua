@@ -14,10 +14,18 @@ local function ScoreHex(score)
 	return format("%02x%02x%02x", r * 255, g * 255, b * 255)
 end
 
+--- Tamaño de los íconos en el seguimiento: acompaña la letra de los títulos de
+--- Questie (10 por defecto, que da íconos de 18).
+function Tracker.IconSize()
+	local profile = Questie and Questie.db and Questie.db.profile
+	local fontSize = profile and tonumber(profile.trackerFontSizeQuest) or 10
+	return math.max(14, math.min(28, fontSize + 8))
+end
+
 --- Texto corto para el seguimiento: puntaje, íconos y la mejora de equipo.
 function Tracker.BadgeText(result)
 	local parts = { format("|cff%s%d|r", ScoreHex(result.score), result.score) }
-	local icons = QR.TagIcons(result, 14)
+	local icons = QR.TagIcons(result, Tracker.IconSize(), true)
 	if icons ~= "" then
 		parts[#parts + 1] = icons
 	end
