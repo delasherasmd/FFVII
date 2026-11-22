@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<save>
+  <version major="4" minor="0" revision="9" build="331"/>
+  <region id="Progressions">
+    <node id="root">
+      <children>
+        <node id="Progression">
+          <attribute id="Level" type="uint8" value="1"/>
+          <attribute id="Name" type="LSString" value="Minotaur"/>
+          <attribute id="PassivesAdded" type="LSString" value="MS_Minotaur_Horns;MS_Minotaur_GoringRush;MS_Minotaur_HammeringHorns;MS_Minotaur_LabyrinthineRecall"/>
+          <attribute id="ProgressionType" type="uint8" value="2"/>
+          <attribute id="TableUUID" type="guid" value="041a44f1-bd4e-4852-b553-6896c4e12da7"/>
+          <attribute id="UUID" type="guid" value="a6b1d1a2-3c8e-4f0e-9b7d-0d6f2e1c4a01"/>
+        </node>
+        <node id="Progression">
+          <attribute id="Level" type="uint8" value="1"/>
+          <attribute id="Name" type="LSString" value="Satyr"/>
+          <attribute id="PassivesAdded" type="LSString" value="MS_Satyr_Ram;MS_Satyr_MagicResistance;MS_Satyr_MirthfulLeaps;MS_Satyr_Reveler;MS_Satyr_Speed"/>
+          <attribute id="ProgressionType" type="uint8" value="2"/>
+          <attribute id="TableUUID" type="guid" value="e503995e-6b75-480c-9f3c-98df306e45a4"/>
+          <attribute id="UUID" type="guid" value="b7c2e2b3-4d9f-4a1f-8c8e-1e7a3f2d5b02"/>
+        </node>
+      </children>
+    </node>
+  </region>
+</save>

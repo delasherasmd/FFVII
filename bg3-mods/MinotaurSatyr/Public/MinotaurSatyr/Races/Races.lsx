@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<save>
+  <version major="4" minor="0" revision="9" build="331"/>
+  <region id="Races">
+    <node id="root">
+      <children>
+        <node id="Race">
+          <attribute id="Name" type="FixedString" value="Minotaur"/>
+          <attribute id="DisplayName" type="TranslatedString" handle="h756091eegbccag1f29g934fgc1b305661c55" version="1"/>
+          <attribute id="Description" type="TranslatedString" handle="hbfad556cgf81dg220ag0573g23537cc86080" version="1"/>
+          <attribute id="ParentGuid" type="guid" value=""/>
+          <attribute id="ProgressionTableUUID" type="guid" value="041a44f1-bd4e-4852-b553-6896c4e12da7"/>
+          <attribute id="RaceSoundSwitch" type="FixedString" value="Human"/>
+          <attribute id="UUID" type="guid" value="56efb91c-23c9-4f11-a741-4b9bf6e4d1e9"/>
+        </node>
+        <node id="Race">
+          <attribute id="Name" type="FixedString" value="Satyr"/>
+          <attribute id="DisplayName" type="TranslatedString" handle="h5b9a30dagbc05gad34g3353g6c1c21a7e11a" version="1"/>
+          <attribute id="Description" type="TranslatedString" handle="hbcd2999cg38c4gdf3cg5c43gda06c6908ce4" version="1"/>
+          <attribute id="ParentGuid" type="guid" value=""/>
+          <attribute id="ProgressionTableUUID" type="guid" value="e503995e-6b75-480c-9f3c-98df306e45a4"/>
+          <attribute id="RaceSoundSwitch" type="FixedString" value="Human"/>
+          <attribute id="UUID" type="guid" value="9fec2d6e-be61-4fbe-b7c0-0e83eec9e2ca"/>
+        </node>
+      </children>
+    </node>
+  </region>
+</save>

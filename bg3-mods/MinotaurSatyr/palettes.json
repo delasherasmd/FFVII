@@ -1,0 +1,19 @@
+{
+  "_nota": "Paletas de personalizacion. Se convierten a LSX (CharacterCreationSkinColors / colores de cuernos) cuando tengamos los archivos originales del juego como plantilla. Colores en hex sRGB.",
+  "pelaje": {
+    "Negro azabache": "#1b1712", "Marron oscuro": "#3b2618", "Castaño": "#5e3a22",
+    "Rojizo": "#7a3b1f", "Canela": "#a0683a", "Leonado": "#b98a52",
+    "Crema": "#d9c39a", "Blanco hueso": "#e8e0cf", "Gris ceniza": "#7d7a74",
+    "Gris pizarra": "#4a4d52", "Pardo tostado": "#8a5a36", "Ocre": "#a77b2c"
+  },
+  "cuernos_base": {
+    "Hueso": "#d8ccb0", "Marfil": "#efe6cf", "Negro": "#1f1c1a",
+    "Gris piedra": "#6f6a63", "Marron cuerno": "#5a4330", "Ambar": "#9a6a2a"
+  },
+  "cuernos_punta": {
+    "Negro": "#141210", "Hueso claro": "#eee4cc", "Marron": "#4a3424",
+    "Dorado (pintado)": "#c9a43a", "Rojo (pintado)": "#8f2a1e", "Igual a la base": null
+  },
+  "marcas": ["Hocico claro", "Patas oscuras", "Manchas", "Lomo oscuro", "Pintura tribal"],
+  "formas_cuernos": ["Cortos", "Largos hacia afuera", "Curvados hacia adelante", "Hacia arriba", "Uno roto", "Con anillos de metal"]
+}

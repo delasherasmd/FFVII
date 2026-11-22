@@ -1,0 +1,16 @@
+new entry "MS_GORING_RUSH"
+type "StatusData"
+data "StatusType" "BOOST"
+data "DisplayName" "h11de2664g6fc6gc9e7gee35gca94b4a4fd52;1"
+data "Icon" "Action_Dash"
+data "StackId" "MS_GORING_RUSH"
+data "StatusPropertyFlags" "DisableOverhead;DisableCombatlog"
+
+new entry "MS_HAMMERING_READY"
+type "StatusData"
+data "StatusType" "BOOST"
+data "DisplayName" "h270e6489ga726gbafbgd81bg6826ee0c5da2;1"
+data "Icon" "Action_Shove"
+data "StackId" "MS_HAMMERING_READY"
+data "StatusPropertyFlags" "DisableOverhead;DisableCombatlog"
+
