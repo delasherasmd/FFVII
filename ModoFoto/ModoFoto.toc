@@ -1,7 +1,7 @@
 ## Interface: 11508, 11509, 16001
 ## Title: Modo Foto
-## Notes: Capturas de pantalla limpias: oculta la interfaz, los nombres, las placas y los bocadillos. Con temporizador y atajos de teclado.
-## Version: 1.0.0
+## Notes: Capturas de pantalla limpias: oculta toda la interfaz, los nombres y las placas. Botón de foto en un clic, temporizador y cámara corrida a un costado.
+## Version: 1.1.0
 ## SavedVariables: ModoFotoDB
 
 ModoFoto.lua

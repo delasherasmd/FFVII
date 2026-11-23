@@ -8,4 +8,13 @@
 	<Binding name="MODOFOTO_TIMER" category="ADDONS">
 		ModoFoto_ShotWithTimer()
 	</Binding>
+	<Binding name="MODOFOTO_CAM_LEFT" category="ADDONS">
+		ModoFoto_CameraLeft()
+	</Binding>
+	<Binding name="MODOFOTO_CAM_RIGHT" category="ADDONS">
+		ModoFoto_CameraRight()
+	</Binding>
+	<Binding name="MODOFOTO_CAM_CENTER" category="ADDONS">
+		ModoFoto_CameraCenter()
+	</Binding>
 </Bindings>
