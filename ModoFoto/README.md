@@ -62,19 +62,24 @@ La cámara solo se corre durante el modo foto. Al salir vuelve a estar centrada,
 
 | Comando | Qué hace |
 |---|---|
-| `/foto` | Entra o sale del modo foto. Con la interfaz oculta, **Impr Pant** saca la captura y **Esc** sale. |
+| `/foto` | Entra o sale del modo foto. Con la interfaz oculta, **Impr Pant** saca la captura y **Esc** sale. También funcionan `/modofoto` y `/fotos`. |
 | `/foto ya` | Saca una foto limpia en el momento y vuelve a mostrar la interfaz (lo mismo que el clic en el botón). |
 | `/foto timer [segundos]` | Cuenta regresiva (3 segundos por defecto) y foto limpia. |
 | `/foto tiempo <segundos>` | Cambia la duración por defecto del temporizador (de 1 a 60). |
 | `/foto nombres` | Elige si se ocultan o no los nombres, las placas y los bocadillos. |
 | `/foto boton` | Muestra u oculta el botón. |
 | `/foto calidad` | Configura las capturas en PNG con la máxima calidad. |
+| `/foto aviso` | Muestra o no el aviso del chat al entrar al juego. |
 
 Los atajos de teclado para la foto, el temporizador y la cámara están en **Opciones > Atajos de teclado > AddOns > Modo Foto**.
 
 Las capturas se guardan en `World of Warcraft\<versión>\Screenshots`.
 
 ## Notas
+
+- Al entrar al juego aparece en el chat **"Modo Foto: listo"**. Si no aparece, el addon no está cargado: en la pantalla de personajes, **AddOns**, fijate que esté activado (y marcá "Cargar AddOns desactualizados" si sale como desactualizado).
+- Si otro addon también usa `/foto`, el aviso lo dice: usá `/modofoto` o `/fotos`.
+- Si algo falla, el addon lo escribe en el chat en vez de no hacer nada.
 
 - No funciona en combate: el juego no deja ocultar la interfaz con un addon durante el combate. Si entrás en combate en modo foto, la interfaz vuelve sola.
 - Si el juego se cierra en modo foto, los nombres, las placas y la cámara se restauran la próxima vez que entres.

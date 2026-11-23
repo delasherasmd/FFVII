@@ -15,6 +15,7 @@ BINDING_NAME_MODOFOTO_CAM_CENTER = "Centrar la cámara"
 
 local DEFAULTS = {
 	ocultarNombres = true, -- nombres, placas y bocadillos sobre los personajes
+	aviso = true,          -- mensaje en el chat al entrar al juego
 	segundos = 3,          -- duración del temporizador
 	boton = { point = "TOPRIGHT", x = -230, y = -20, oculto = false },
 	-- desplazamiento: cuánto se corre la cámara a un costado (0 = personaje centrado).
@@ -681,6 +682,8 @@ local function CancelCountdown()
 	end
 end
 
+local Exit
+
 local function Enter()
 	if active then
 		return true
@@ -691,15 +694,22 @@ local function Enter()
 	end
 
 	active = true
-	HideWorldText()
-	ApplyCamera()
-	SetUIVisibility(false)
-	HideLooseFrames()
-	CaptureScreenshotKeys()
+	local ok, problem = pcall(function()
+		HideWorldText()
+		ApplyCamera()
+		SetUIVisibility(false)
+		HideLooseFrames()
+		CaptureScreenshotKeys()
+	end)
+	if not ok then
+		Exit() -- deja todo como estaba
+		Print("no pude entrar al modo foto: " .. tostring(problem))
+		return false
+	end
 	return true
 end
 
-local function Exit()
+function Exit()
 	CancelCountdown()
 	driver:SetScript("OnUpdate", nil)
 	shotPending = false
@@ -768,8 +778,13 @@ end
 
 local function Toggle()
 	if active then
+		local stuck = UIParent:IsShown() -- marcado como activo, pero la interfaz está a la vista
 		Exit()
-	elseif Enter() then
+		if not stuck then
+			return
+		end
+	end
+	if Enter() then
 		ShowPad()
 		ShowOverlay("Modo foto: Impr Pant o el botón de la cámara para la foto, Esc para salir", 24, 3)
 	end
@@ -925,12 +940,58 @@ local function PrintHelp()
 	DEFAULT_CHAT_FRAME:AddMessage("  /foto joystick  -  muestra u oculta el control de cámara del modo foto")
 	DEFAULT_CHAT_FRAME:AddMessage("  /foto joystick invertir  -  invierte arriba y abajo de la palanca")
 	DEFAULT_CHAT_FRAME:AddMessage("  /foto calidad  -  capturas en PNG con la máxima calidad")
+	DEFAULT_CHAT_FRAME:AddMessage("  /foto aviso  -  mostrar o no el aviso al entrar al juego")
 	DEFAULT_CHAT_FRAME:AddMessage("  Atajos (foto, temporizador, correr la cámara): Opciones > Atajos de teclado > AddOns > Modo Foto")
 end
 
+local function CopyDefaults(target, defaults)
+	for key, value in pairs(defaults) do
+		if target[key] == nil then
+			if type(value) == "table" then
+				target[key] = {}
+				CopyDefaults(target[key], value)
+			else
+				target[key] = value
+			end
+		elseif type(value) == "table" and type(target[key]) == "table" then
+			CopyDefaults(target[key], value)
+		end
+	end
+end
+
+local function InitDB()
+	ModoFotoDB = ModoFotoDB or {}
+	db = ModoFotoDB
+	CopyDefaults(db, DEFAULTS)
+end
+
+--- Otro addon que también usa /foto (el juego elige uno solo).
+local function OtherSlashOwner()
+	for key, value in pairs(_G) do
+		if type(key) == "string" and type(value) == "string" and value:lower() == "/foto"
+			and key:find("^SLASH_") and not key:find("^SLASH_MODOFOTO") then
+			return key:match("^SLASH_(.-)%d*$")
+		end
+	end
+end
+
+local HandleSlash
+
 SLASH_MODOFOTO1 = "/foto"
 SLASH_MODOFOTO2 = "/modofoto"
+SLASH_MODOFOTO3 = "/fotos"
 SlashCmdList.MODOFOTO = function(input)
+	if not db then
+		InitDB() -- por si la carga del addon no llegó a terminar
+	end
+	-- El juego oculta los errores de los addons: si algo falla, que se vea en el chat.
+	local ok, problem = pcall(HandleSlash, input)
+	if not ok then
+		Print("algo falló: " .. tostring(problem))
+	end
+end
+
+function HandleSlash(input)
 	local command, argument = strsplit(" ", strtrim(input or ""):lower(), 2)
 
 	if command == "" then
@@ -979,6 +1040,9 @@ SlashCmdList.MODOFOTO = function(input)
 		db.camara.alejar = not db.camara.alejar
 		Print(db.camara.alejar and "en modo foto vas a poder alejar la cámara más que lo normal."
 			or "en modo foto la cámara se aleja lo normal.")
+	elseif command == "aviso" then
+		db.aviso = not db.aviso
+		Print(db.aviso and "vas a ver el aviso al entrar al juego." or "sin aviso al entrar al juego.")
 	elseif command == "calidad" then
 		BestQuality()
 	else
@@ -1000,20 +1064,7 @@ events:RegisterEvent("SCREENSHOT_STARTED")
 events:RegisterEvent("SCREENSHOT_SUCCEEDED")
 events:RegisterEvent("SCREENSHOT_FAILED")
 
-local function CopyDefaults(target, defaults)
-	for key, value in pairs(defaults) do
-		if target[key] == nil then
-			if type(value) == "table" then
-				target[key] = {}
-				CopyDefaults(target[key], value)
-			else
-				target[key] = value
-			end
-		elseif type(value) == "table" and type(target[key]) == "table" then
-			CopyDefaults(target[key], value)
-		end
-	end
-end
+events:RegisterEvent("PLAYER_LOGIN")
 
 events:SetScript("OnEvent", function(self, event, arg1)
 	if event == "ADDON_LOADED" then
@@ -1022,9 +1073,7 @@ events:SetScript("OnEvent", function(self, event, arg1)
 		end
 		self:UnregisterEvent("ADDON_LOADED")
 
-		ModoFotoDB = ModoFotoDB or {}
-		db = ModoFotoDB
-		CopyDefaults(db, DEFAULTS)
+		InitDB()
 
 		-- El juego se cerró en modo foto la última vez.
 		RestoreSettings()
@@ -1037,6 +1086,13 @@ events:SetScript("OnEvent", function(self, event, arg1)
 				Exit()
 			end
 		end)
+	elseif event == "PLAYER_LOGIN" then
+		local other = OtherSlashOwner()
+		if other then
+			Print(format("listo. Otro addon (%s) también usa /foto: usá /modofoto o /fotos.", other))
+		elseif db and db.aviso then
+			Print("listo. Escribí /foto para entrar al modo foto (o Ctrl+clic en el catalejo). /foto ayuda para más.")
+		end
 	elseif event == "PLAYER_REGEN_DISABLED" then
 		-- Último momento antes del bloqueo de combate: devolver la interfaz.
 		if active or countdownTicker then
