@@ -1,5 +1,7 @@
 # Plan: evaluación de equipo por estadísticas (para el lunes 23/11)
 
+**Estado (23/11):** hecho en Questie Relevancia 1.2.0, pestaña **Estadísticas**. Se usaron las respuestas por defecto: pestaña dentro de Questie Relevancia; todas las fuentes (las profesiones y la subasta, marcadas); en nivel 60, comparación con y sin bandas. La base de objetos se genera con `tools/generar_estadisticas.py` (CMaNGOS Classic + PNJ de Questie).
+
 ## Qué tiene que hacer
 
 1. Detecta en qué **rama de talentos** estás, según dónde pusiste más puntos. Por ejemplo, un guerrero puede estar en Armas, Furia o Protección. Lo muestra arriba de todo y lo podés cambiar a mano si estás probando otra build.

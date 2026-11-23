@@ -4,7 +4,7 @@ local _, QR = ...
 
 local ROWS = 14
 local ROW_HEIGHT = 22
-local WIDTH, HEIGHT = 760, 540
+local WIDTH, HEIGHT = 800, 540
 local LIST_TOP = -136
 local ICON_SIZE = 20 -- íconos de las misiones en la ventana
 
@@ -71,6 +71,7 @@ local TABS = {
 	{ key = "nivel", name = "Por nivel" },
 	{ key = "mazmorra", name = "Mazmorra" },
 	{ key = "equipo", name = "Equipo" },
+	{ key = "estadisticas", name = "Estadísticas" },
 }
 
 local CATEGORY_FILTERS = {
@@ -326,7 +327,9 @@ local function CreateRow(parent, index)
 	row.chain:SetJustifyH("RIGHT")
 
 	row:SetScript("OnEnter", function(self)
-		if self.result then
+		if self.stat then
+			QR.StatsTooltip(self, self.stat)
+		elseif self.result then
 			QR.QuestTooltip(self, self.result)
 		elseif self.gearRow then
 			GearTooltip(self, self.gearRow)
@@ -336,7 +339,9 @@ local function CreateRow(parent, index)
 	end)
 	row:SetScript("OnLeave", function() GameTooltip:Hide() end)
 	row:SetScript("OnClick", function(self, mouseButton)
-		if self.result then
+		if self.stat then
+			QR.StatsClick(self.stat, mouseButton)
+		elseif self.result then
 			if mouseButton == "RightButton" then
 				QR.ShowCatalog(self.result.id)
 			else
@@ -358,7 +363,7 @@ local function CreateRow(parent, index)
 end
 
 local function ClearRow(row)
-	row.result, row.gearRow, row.dungeon = nil, nil, nil
+	row.result, row.gearRow, row.dungeon, row.stat = nil, nil, nil, nil
 	row.score:SetText("")
 	row.icons:SetText("")
 	row.name:SetText("")
@@ -434,6 +439,184 @@ local function SetGearRow(row, gearRow)
 end
 
 --------------------------------------------------------------------------------
+-- Pestaña Estadísticas
+--------------------------------------------------------------------------------
+
+local SOURCE_ICONS = {
+	quest = "Interface\\GossipFrame\\AvailableQuestIcon",
+	vendor = "Interface\\GossipFrame\\VendorGossipIcon",
+	drop = ICON_PATHS.mazmorra,
+	craft = "Interface\\Icons\\Trade_BlackSmithing",
+	world = ICON_PATHS.oro,
+	chest = "Interface\\Icons\\INV_Box_02",
+	container = "Interface\\Icons\\INV_Misc_Bag_10",
+}
+local CRAFT_ICONS = {
+	[164] = "Interface\\Icons\\Trade_BlackSmithing", [165] = "Interface\\Icons\\Trade_LeatherWorking",
+	[197] = "Interface\\Icons\\Trade_Tailoring", [202] = "Interface\\Icons\\Trade_Engineering",
+	[171] = "Interface\\Icons\\Trade_Alchemy", [333] = "Interface\\Icons\\Trade_Engraving",
+}
+
+local function PercentColor(percent)
+	if percent >= 100 then return "|cff20ff20" end
+	if percent >= 80 then return "|cffa0ff40" end
+	if percent >= 60 then return "|cffffd100" end
+	return "|cffff6040"
+end
+
+local function SourceIcon(source)
+	local path = source.kind == "craft" and CRAFT_ICONS[source.skill] or SOURCE_ICONS[source.kind]
+	return path and Icon(path, 18) or ""
+end
+
+local function RequestItem(itemId)
+	if itemId and C_Item and C_Item.RequestLoadItemDataByID and not (C_Item.GetItemInfo and C_Item.GetItemInfo(itemId)) then
+		pcall(C_Item.RequestLoadItemDataByID, itemId)
+	end
+end
+
+local function SetMustHaveRow(row, entry, totalAverage)
+	local candidate = entry.candidate
+	local item = candidate.item
+	RequestItem(item.id)
+	local percent = totalAverage > 0 and candidate.gain / totalAverage * 100 or 0
+	row.score:SetText(format("|cff20ff20+%d%%|r", math.max(1, math.floor(percent + 0.5))))
+	local icon = QR.Data.ItemIcon(item.id)
+	local source = candidate.sources[1]
+	row.icons:SetText(format("%s %s", icon and Icon(icon, 20) or "", SourceIcon(source)))
+	row.name:SetText(ItemText(item.id, nil, 16) .. (candidate.owned and " |cff20ff20(lo tenés)|r" or "")
+		.. (candidate.estimated and " |cffaaaaaa~|r" or ""))
+	row.name:SetTextColor(1, 1, 1)
+	local text, place = QR.Stats.SourceText(source, item)
+	row.zone:SetText(place ~= "" and format("%s |cffaaaaaa- %s|r", text, place) or text)
+	row.chain:SetText(SLOT_NAMES[candidate.slot] or "")
+end
+
+local function SetSlotRow(row, entry)
+	local slotRow = entry.slot
+	local itemId = slotRow.entry and slotRow.entry.itemId
+	RequestItem(itemId)
+	if slotRow.best then RequestItem(slotRow.best.id) end
+	if slotRow.average and slotRow.average > 0 then
+		local percent = math.floor(slotRow.have / slotRow.average * 100 + 0.5)
+		row.score:SetText(PercentColor(percent) .. percent .. "%|r")
+	else
+		row.score:SetText("|cff808080-|r")
+	end
+	local have = itemId and QR.Data.ItemIcon(itemId)
+	local best = slotRow.best and QR.Data.ItemIcon(slotRow.best.id)
+	row.icons:SetText(format("%s %s %s", have and Icon(have, 20) or "", best and "|cffaaaaaa>|r" or "",
+		best and Icon(best, 20) or ""))
+	row.name:SetText(slotRow.name .. ": " .. ItemText(itemId, nil, 16))
+	row.name:SetTextColor(1, 1, 1)
+	if slotRow.best and (slotRow.bestPower or 0) > slotRow.have + 0.5 then
+		row.zone:SetText("Lo mejor: " .. ItemText(slotRow.best.id, nil, 16))
+	elseif slotRow.best then
+		row.zone:SetText("|cff20ff20Ya tenés lo mejor para tu nivel|r")
+	else
+		row.zone:SetText("")
+	end
+end
+
+local function SetKeyStatRow(row, entry)
+	local stat = entry.key
+	local S = QR.Stats
+	local percent = stat.average > 0 and math.floor(stat.have / stat.average * 100 + 0.5) or nil
+	row.score:SetText(percent and (PercentColor(percent) .. percent .. "%|r") or "")
+	row.name:SetText(S.STAT_NAMES[stat.key] or stat.key)
+	row.name:SetTextColor(1, 0.82, 0)
+	local function Number(value)
+		if stat.key == "D" then return format("%.1f", value / 10) end
+		return format(value >= 10 and "%d" or "%.1f", value)
+	end
+	row.zone:SetText(format("tu equipo %s  |cffaaaaaamedia %s|r", Number(stat.have), Number(stat.average)))
+end
+
+function QR.StatsTooltip(owner, entry)
+	local S, D = QR.Stats, QR.Data
+	GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
+	if entry.kind == "must" then
+		local candidate = entry.candidate
+		local ok = GameTooltip.SetItemByID and pcall(GameTooltip.SetItemByID, GameTooltip, candidate.item.id)
+		if not ok then
+			GameTooltip:AddLine(D.ItemName(candidate.item.id), 1, 1, 1)
+		end
+		GameTooltip:AddLine(" ")
+		GameTooltip:AddLine(format("Mejora %s: +%.0f puntos de poder", SLOT_NAMES[candidate.slot] or "la ranura",
+			candidate.gain), 0.2, 1, 0.2)
+		if candidate.estimated then
+			GameTooltip:AddLine("Tiene sufijo al azar: se calcula con el mejor para tu rama.", 0.7, 0.7, 0.7)
+		end
+		if candidate.owned then
+			GameTooltip:AddLine("Ya lo tenés en las bolsas o el banco.", 0.2, 1, 0.2)
+		end
+		GameTooltip:AddLine("Cómo conseguirlo:", 1, 0.82, 0)
+		for i = 1, math.min(3, #candidate.sources) do
+			local text, place = S.SourceText(candidate.sources[i], candidate.item)
+			GameTooltip:AddDoubleLine(text, place, 1, 1, 1, 0.7, 0.7, 0.7)
+		end
+		GameTooltip:AddLine(" ")
+		GameTooltip:AddLine("Clic: ver en el mapa. Mayús+clic: enlazarlo en el chat.", 0.5, 0.8, 1)
+	elseif entry.kind == "slot" then
+		local slotRow = entry.slot
+		GameTooltip:AddLine(slotRow.name, 1, 0.82, 0)
+		GameTooltip:AddLine("Llevás: " .. ItemText(slotRow.entry and slotRow.entry.itemId, nil, 16), 1, 1, 1)
+		GameTooltip:AddDoubleLine("Poder de lo tuyo", format("%.0f", slotRow.have), 1, 1, 1, 1, 1, 1)
+		if slotRow.average then
+			GameTooltip:AddDoubleLine("Media de tu nivel (verdes y azules)", format("%.0f", slotRow.average), 1, 1, 1, 1, 1, 1)
+		end
+		if slotRow.best then
+			GameTooltip:AddDoubleLine("Lo mejor hasta tu nivel", format("%.0f", slotRow.bestPower or 0), 1, 1, 1, 1, 1, 1)
+			GameTooltip:AddLine("  " .. ItemText(slotRow.best.id, nil, 16), 1, 1, 1)
+			local sources = S.UsableSources(slotRow.best, QR.StatsView().ctx)
+			if sources[1] then
+				local text, place = S.SourceText(sources[1], slotRow.best)
+				GameTooltip:AddDoubleLine("  " .. text, place, 0.8, 0.8, 0.8, 0.6, 0.6, 0.6)
+			end
+		end
+		if slotRow.bestRaid then
+			GameTooltip:AddDoubleLine("Con bandas", format("%.0f", slotRow.bestRaidPower or 0), 1, 1, 1, 1, 1, 1)
+			GameTooltip:AddLine("  " .. ItemText(slotRow.bestRaid.id, nil, 16), 1, 1, 1)
+		end
+		if slotRow.slot == 13 or slotRow.slot == 14 then
+			GameTooltip:AddLine("Los efectos de uso de los abalorios no se cuentan.", 0.7, 0.7, 0.7)
+		end
+		if slotRow.entry and slotRow.entry.fromGame then
+			GameTooltip:AddLine("Objeto que no está en la base: se usan los datos del juego.", 0.7, 0.7, 0.7)
+		end
+	elseif entry.kind == "key" then
+		local name = QR.Stats.STAT_NAMES[entry.key.key] or entry.key.key
+		GameTooltip:AddLine(name, 1, 0.82, 0)
+		GameTooltip:AddLine("Lo que suma tu equipo, comparado con lo que suma un equipo", 1, 1, 1)
+		GameTooltip:AddLine("medio de tu nivel (sin contar tus atributos base ni talentos).", 1, 1, 1)
+	end
+	GameTooltip:Show()
+end
+
+function QR.StatsClick(entry, mouseButton)
+	if entry.kind ~= "must" then
+		return
+	end
+	local candidate = entry.candidate
+	if IsModifiedClick and IsModifiedClick("CHATLINK") then
+		local link = select(2, (C_Item and C_Item.GetItemInfo or GetItemInfo)(candidate.item.id))
+		if link and ChatEdit_InsertLink then
+			ChatEdit_InsertLink(link)
+		end
+		return
+	end
+	local source = candidate.sources[1]
+	if source.kind == "quest" then
+		QR.Data.ShowQuest({ id = source.id, name = QR.Data.QuestName(source.id), zone = QR.Data.QuestZone(source.id) })
+	else
+		local zone = QR.Stats.SourceZone(source)
+		if zone then
+			QR.Data.ShowQuest({ id = 0, name = QR.Data.ItemName(candidate.item.id), zone = zone })
+		end
+	end
+end
+
+--------------------------------------------------------------------------------
 -- Ventana
 --------------------------------------------------------------------------------
 
@@ -483,9 +666,9 @@ function QR.CreateWindow()
 	-- Pestañas
 	frame.tabs = {}
 	for i, tab in ipairs(TABS) do
-		local button = SmallButton(frame, 116, tab.name)
+		local button = SmallButton(frame, 106, tab.name)
 		button:SetHeight(24)
-		button:SetPoint("TOPLEFT", 20 + (i - 1) * 120, -42)
+		button:SetPoint("TOPLEFT", 20 + (i - 1) * 109, -42)
 		button:SetScript("OnClick", function()
 			db.tab = tab.key
 			ResetScroll()
@@ -653,6 +836,9 @@ function QR.CreateWindow()
 	local function SetupFilters(defs, current, onSelect)
 		for i, button in ipairs(frame.filters) do
 			local def = defs[i]
+			button:SetWidth(84)
+			button:ClearAllPoints()
+			button:SetPoint("TOPLEFT", 20 + (i - 1) * 86, -70)
 			if def then
 				button:SetText(def.text or def.label)
 				button.onClick = function() onSelect(def.key) end
@@ -662,6 +848,106 @@ function QR.CreateWindow()
 				button:Hide()
 			end
 		end
+	end
+
+	-- Pestaña Estadísticas: botones de rama (3) y de rol, y la lista.
+	function frame:StatsEntries()
+		local S = QR.Stats
+		local view = QR.StatsView()
+		for _, button in ipairs(self.filters) do button:Hide() end
+		if view.error then
+			return {}, "No se pudo evaluar el equipo: " .. view.error
+		end
+		local ctx, report = view.ctx, view.report
+		local classFile = ctx.classFile
+		local spec = ctx.spec
+		local trees = S.TREES[classFile]
+		for i = 1, 3 do
+			local button = self.filters[i]
+			button:SetWidth(138)
+			button:ClearAllPoints()
+			button:SetPoint("TOPLEFT", 20 + (i - 1) * 141, -70)
+			button:SetText(format("%s %d", spec.names[i] or trees[i].name, spec.points[i] or 0))
+			button.onClick = function()
+				db.statsTree = i
+				if not (trees[i][db.statsRole or ""]) then
+					db.statsRole = nil
+				end
+			end
+			if ctx.tree == i then button:LockHighlight() else button:UnlockHighlight() end
+			button:Show()
+		end
+		local roles = S.ClassRoles(classFile)
+		for j, role in ipairs(roles) do
+			local button = self.filters[3 + j]
+			button:SetWidth(80)
+			button:ClearAllPoints()
+			button:SetPoint("TOPLEFT", 20 + 3 * 141 + 6 + (j - 1) * 82, -70)
+			button:SetText(S.ROLE_NAMES[role])
+			button.onClick = function() db.statsRole = role end
+			if ctx.role == role then button:LockHighlight() else button:UnlockHighlight() end
+			button:Show()
+		end
+		if db.statsTree or db.statsRole then
+			local button = self.filters[8]
+			button:SetWidth(64)
+			button:ClearAllPoints()
+			button:SetPoint("TOPRIGHT", -24, -70)
+			button:SetText("Auto")
+			button.onClick = function() db.statsTree, db.statsRole = nil, nil end
+			button:UnlockHighlight()
+			button:Show()
+		end
+
+		local totals = report.totals
+		local percent = totals.average > 0 and math.floor(totals.have / totals.average * 100 + 0.5) or nil
+		local ceiling = totals.best > 0 and math.floor(totals.have / totals.best * 100 + 0.5) or nil
+		local detected
+		if spec.none then
+			detected = "sin talentos todavía"
+		else
+			detected = format("rama detectada: %s%s", spec.names[spec.index] or trees[spec.index].name,
+				spec.hybrid and " (híbrida)" or "")
+		end
+		local summary = {}
+		if report.unknown > 0 and totals.have == 0 then
+			percent, ceiling = nil, nil
+			summary[#summary + 1] = "|cffffd100Todavía no cargaron los datos de tu equipo.|r"
+		elseif report.unknown > 0 then
+			summary[#summary + 1] = format("|cffaaaaaa%d objetos sin datos todavía|r", report.unknown)
+		end
+		if percent then
+			summary[#summary + 1] = format("Tu equipo: %s%d%%|r de la media de tu nivel", PercentColor(percent), percent)
+		end
+		if ceiling then
+			summary[#summary + 1] = format("%d%% de lo mejor que podés conseguir", ceiling)
+		end
+		if ctx.level >= 60 and totals.raid > totals.best then
+			summary[#summary + 1] = format("%d%% con bandas", math.floor(totals.have / totals.raid * 100 + 0.5))
+		end
+		self.subtext:SetText(format("%s  |cffaaaaaa(%s)|r", table.concat(summary, "  -  "), detected))
+
+		local entries = {}
+		entries[#entries + 1] = { kind = "header",
+			entry = { text = "Infaltables: lo que más suma, primero lo más fácil de conseguir" } }
+		for _, candidate in ipairs(report.mustHave) do
+			entries[#entries + 1] = { kind = "must", candidate = candidate, totalAverage = totals.average }
+		end
+		if #report.mustHave == 0 then
+			entries[#entries + 1] = { kind = "header", entry = { text = "|cffaaaaaaNo encontré mejoras a tu alcance.|r" } }
+		end
+		entries[#entries + 1] = { kind = "header", entry = { text = "Por ranura: lo tuyo comparado con la media de tu nivel" } }
+		for _, slotRow in ipairs(report.slots) do
+			if not slotRow.skip then
+				entries[#entries + 1] = { kind = "slot", slot = slotRow }
+			end
+		end
+		local profileName = S.TREES[classFile][ctx.tree].name .. ", " .. S.ROLE_NAMES[ctx.role]:lower()
+		entries[#entries + 1] = { kind = "header", entry = { text = "Estadísticas clave (" .. profileName .. ")" } }
+		for _, key in ipairs(report.keyStats) do
+			entries[#entries + 1] = { kind = "key", key = key }
+		end
+		return entries, nil
 	end
 
 	local categoryDefs
@@ -715,7 +1001,10 @@ function QR.CreateWindow()
 		local entries, empty = {}, EMPTY_TEXT[tab]
 		local index = QR.Index
 
-		if index.building or not index.ready then
+		if tab == "estadisticas" then
+			headers = { "Mejora", "", "Objeto", "Cómo conseguirlo / detalle", "Ranura" }
+			entries, empty = self:StatsEntries()
+		elseif index.building or not index.ready then
 			SetupFilters({}, nil, function() end)
 			empty = format("Analizando la base de datos de Questie... %d%%", index.progress * 100)
 			entries = {}
@@ -809,6 +1098,15 @@ function QR.CreateWindow()
 					SetDungeonRow(row, entry.entry)
 				elseif entry.kind == "gear" then
 					SetGearRow(row, entry.gearRow)
+				elseif entry.kind == "must" then
+					row.stat = entry
+					SetMustHaveRow(row, entry, entry.totalAverage)
+				elseif entry.kind == "slot" then
+					row.stat = entry
+					SetSlotRow(row, entry)
+				elseif entry.kind == "key" then
+					row.stat = entry
+					SetKeyStatRow(row, entry)
 				end
 				row:Show()
 			else

@@ -219,6 +219,72 @@ function QR.DungeonView()
 	return view
 end
 
+--- Pestaña Estadísticas: evaluación del equipo según la rama y el rol elegidos.
+--- No depende del índice de misiones; se guarda hasta que cambia el equipo o el nivel.
+QR.statsCache = {}
+
+function QR.StatsSettings()
+	local S = QR.Stats
+	local classFile = QR.Data.PlayerClass()
+	local tree = db.statsTree
+	if tree and not (S.TREES[classFile] and S.TREES[classFile][tree]) then
+		tree = nil
+	end
+	local role = db.statsRole
+	if role then
+		local valid = false
+		for _, r in ipairs(S.ClassRoles(classFile)) do
+			if r == role then valid = true end
+		end
+		if not valid then role = nil end
+	end
+	return { tree = tree, role = role }
+end
+
+function QR.StatsView()
+	local settings = QR.StatsSettings()
+	local key = format("%s:%s", tostring(settings.tree), tostring(settings.role))
+	local cached = QR.statsCache[key]
+	if cached then
+		return cached
+	end
+	local ok, ctx = pcall(QR.Stats.Current, settings)
+	if not ok or not ctx then
+		return { error = not ok and tostring(ctx) or "clase sin datos" }
+	end
+	local okEval, report = pcall(QR.Stats.Evaluate, ctx, QR.Stats.Equipped())
+	if not okEval then
+		return { error = tostring(report) }
+	end
+	cached = { ctx = ctx, report = report }
+	-- Si el juego todavía no cargó algún objeto, no se guarda: se recalcula cuando llegue.
+	if report.unknown == 0 then
+		QR.statsCache[key] = cached
+	end
+	return cached
+end
+
+local namesPending = false
+function QR.StatsNamesArrived()
+	if namesPending then
+		return
+	end
+	namesPending = true
+	C_Timer.After(0.3, function()
+		namesPending = false
+		if QR.UI and QR.UI:IsShown() then
+			QR.UI:Update()
+		end
+	end)
+end
+
+function QR.InvalidateStats()
+	QR.statsCache = {}
+	if QR.UI and QR.UI:IsShown() and db.tab == "estadisticas" then
+		QR.UI:Update()
+	end
+end
+
 function QR.GearView()
 	local cached = QR.viewCache.equipo
 	if cached then
@@ -324,7 +390,7 @@ local function PrintHelp()
 	QR.Print("comandos (también con /qrel o /relevancia):")
 	local lines = {
 		"/qr  -  abre o cierra la ventana",
-		"/qr nivel | mazmorra | equipo  -  abre esa pestaña",
+		"/qr nivel | mazmorra | equipo | estadisticas  -  abre esa pestaña",
 		"/qr seguimiento  -  puntaje e íconos en la barra de Questie (sí/no)",
 		"/qr orden  -  ordenar la barra de Questie por relevancia (sí/no)",
 		"/qr minimapa  -  muestra u oculta el botón del minimapa",
@@ -348,6 +414,7 @@ local function PrintWeights()
 end
 
 local TAB_COMMANDS = { nivel = "nivel", mazmorra = "mazmorra", mazmorras = "mazmorra", equipo = "equipo",
+	estadisticas = "estadisticas", ["estadísticas"] = "estadisticas", stats = "estadisticas",
 	misiones = "log", recomendadas = "recomendadas", resto = "resto" }
 
 local function HandleSlash(input)
@@ -450,6 +517,11 @@ local function OnQuestieReady()
 	events:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
 	events:RegisterEvent("GET_ITEM_INFO_RECEIVED")
 	events:RegisterEvent("PLAYER_REGEN_ENABLED")
+	-- Cambios de talentos (los nombres cambian entre versiones del juego).
+	for _, name in ipairs({ "CHARACTER_POINTS_CHANGED", "PLAYER_TALENT_UPDATE", "ACTIVE_TALENT_GROUP_CHANGED",
+		"SKILL_LINES_CHANGED" }) do
+		pcall(events.RegisterEvent, events, name)
+	end
 
 	-- El índice se arma en segundo plano para tener el puntaje en el seguimiento.
 	StartIndex()
@@ -491,8 +563,15 @@ events:SetScript("OnEvent", function(self, event, arg1)
 	elseif event == "PLAYER_REGEN_ENABLED" then
 		QR.Tracker.OnCombatEnded()
 	elseif event == "PLAYER_LEVEL_UP" or event == "PLAYER_EQUIPMENT_CHANGED" then
+		QR.InvalidateStats()
 		QR.RequestRefresh(1)
+	elseif event == "CHARACTER_POINTS_CHANGED" or event == "PLAYER_TALENT_UPDATE"
+		or event == "ACTIVE_TALENT_GROUP_CHANGED" or event == "SKILL_LINES_CHANGED" then
+		QR.InvalidateStats()
 	elseif event == "GET_ITEM_INFO_RECEIVED" then
+		if QR.UI and QR.UI:IsShown() and db.tab == "estadisticas" then
+			QR.StatsNamesArrived()
+		end
 		QR.RequestRefresh(2)
 	else
 		QR.RequestRefresh()
