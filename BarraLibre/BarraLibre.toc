@@ -1,0 +1,7 @@
+## Interface: 11508, 11509, 16001
+## Title: Barra Libre
+## Notes: Barras propias (hasta 6, horizontales o verticales) para pociones, objetos, hechizos y macros que usás de vez en cuando, con teclas del teclado. Funcionan aunque juegues con mando.
+## Version: 1.0.0
+## SavedVariablesPerCharacter: BarraLibreDB
+
+BarraLibre.lua
