@@ -26,7 +26,25 @@ El botón no sale en las fotos. Si no lo querés en pantalla, `/foto boton` lo o
 
 ## La cámara
 
-La cámara del juego siempre sigue al personaje: ningún addon la puede soltar para que vuele libre. Lo que sí se puede es **correrla a un costado**, para que el personaje no quede en el centro de la foto, y **alejarla más** que lo normal.
+La cámara del juego siempre sigue al personaje: ningún addon la puede soltar para que vuele libre. Lo que sí se puede es **correrla a un costado**, para que el personaje no quede en el centro de la foto, **inclinarla**, **girarla** y **alejarla más** que lo normal.
+
+### El control en pantalla (joystick)
+
+En el modo foto (Ctrl+clic en el botón, o `/foto`) y durante la cuenta regresiva aparece un control de cámara. **Nunca sale en la foto**: se oculta justo antes de cada captura y vuelve a aparecer después.
+
+| Parte | Qué hace |
+|---|---|
+| **Palanca** | Arrastrala con el mouse: a los costados corre la cámara (el personaje queda a un lado de la foto); arriba y abajo la inclina. Cuanto más lejos del centro, más rápido. Al soltarla vuelve al centro y la cámara queda donde la dejaste. |
+| **Flechas que giran** | Mantené apretado para girar la cámara alrededor del personaje. |
+| **Mira** | Vuelve a centrar al personaje. |
+| **Cámara dorada** | Saca la foto. En el modo foto también podés usar **Impr Pant**. |
+| **X** | Sale del modo foto (igual que Esc). |
+| **Rueda del mouse** | Sobre el control, acerca o aleja la cámara. |
+| **Mayús+arrastrar** | Mueve el control a otro lugar de la pantalla. |
+
+`/foto joystick` lo oculta o lo vuelve a mostrar. Si al subir la palanca la cámara baja, `/foto joystick invertir` lo da vuelta.
+
+### Comandos y atajos de la cámara
 
 | Comando | Qué hace |
 |---|---|

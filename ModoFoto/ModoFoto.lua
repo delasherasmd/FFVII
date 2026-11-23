@@ -20,6 +20,8 @@ local DEFAULTS = {
 	-- desplazamiento: cuánto se corre la cámara a un costado (0 = personaje centrado).
 	-- alejar: permitir alejar la cámara más que el máximo normal durante la foto.
 	camara = { desplazamiento = 0, alejar = true },
+	-- Control de cámara en pantalla durante el modo foto.
+	joystick = { oculto = false, invertir = false, point = "RIGHT", relativePoint = "RIGHT", x = -40, y = -40 },
 }
 
 local CAMERA_STEP = 0.5
@@ -220,8 +222,348 @@ local function ApplyCamera()
 	end
 end
 
+--------------------------------------------------------------------------------
+-- Control de cámara en pantalla (joystick)
+--------------------------------------------------------------------------------
+
+-- Sin padre, para que se vea con la interfaz oculta. Aparece solo en el modo
+-- foto (y durante la cuenta regresiva) y se oculta antes de cada captura, así
+-- nunca sale en la foto.
+local MEDIA = "Interface\\AddOns\\" .. ADDON_NAME .. "\\Media\\"
+local STICK_SIZE = 120
+local KNOB_SIZE = 44
+local STICK_RANGE = (STICK_SIZE - KNOB_SIZE) / 2 -- recorrido de la palanca
+local DEAD_ZONE = 0.15
+local SHIFT_SPEED = 2.5 -- desplazamiento por segundo con la palanca a fondo
+local TILT_SPEED = 0.6  -- inclinación con la palanca a fondo
+local TURN_SPEED = 0.25 -- giro de los botones
+local GOLD = { 1, 0.82, 0 }
+
+local pad
+local MoveCamera -- más abajo
+local motion = { tilt = nil, tiltSpeed = 0, turn = nil }
+
+local function CallIfExists(name, ...)
+	local func = _G[name]
+	if type(func) == "function" then
+		func(...)
+	end
+end
+
+local function StopTilt()
+	if motion.tilt then
+		CallIfExists("MoveViewUpStop")
+		CallIfExists("MoveViewDownStop")
+		motion.tilt, motion.tiltSpeed = nil, 0
+	end
+end
+
+--- amount de -1 a 1: positivo sube la cámara.
+local function Tilt(amount)
+	if db.joystick.invertir then
+		amount = -amount
+	end
+	if math.abs(amount) < DEAD_ZONE then
+		StopTilt()
+		return
+	end
+	local direction = amount > 0 and "Up" or "Down"
+	local speed = math.floor(math.abs(amount) * TILT_SPEED * 20 + 0.5) / 20
+	if direction ~= motion.tilt or speed ~= motion.tiltSpeed then
+		StopTilt()
+		CallIfExists("MoveView" .. direction .. "Start", speed)
+		motion.tilt, motion.tiltSpeed = direction, speed
+	end
+end
+
+local function StopTurn()
+	if motion.turn then
+		CallIfExists("MoveView" .. motion.turn .. "Stop")
+		motion.turn = nil
+	end
+end
+
+local function Turn(direction)
+	StopTurn()
+	CallIfExists("MoveView" .. direction .. "Start", TURN_SPEED)
+	motion.turn = direction
+end
+
+local function PadStatus(text)
+	if pad then
+		pad.status:SetText(text or ("Cámara " .. CameraText()))
+	end
+end
+
+local function ShiftBy(delta)
+	if not CameraAvailable() then
+		return
+	end
+	local offset = (db.camara.desplazamiento or 0) + delta
+	offset = math.max(-CAMERA_LIMIT, math.min(CAMERA_LIMIT, offset))
+	db.camara.desplazamiento = offset
+	-- No hace falta tocar la opción en cada cuadro.
+	if math.abs(offset - (pad.applied or 0)) >= 0.05 or math.abs(offset) == CAMERA_LIMIT then
+		ApplyCameraOffset(offset)
+		pad.applied = offset
+	end
+	PadStatus()
+end
+
+local function CenterKnob()
+	pad.knob:ClearAllPoints()
+	pad.knob:SetPoint("CENTER", pad.stick, "CENTER", 0, 0)
+end
+
+local function ReleaseStick()
+	if not pad or not pad.dragging then
+		return
+	end
+	pad.dragging = false
+	CenterKnob()
+	StopTilt()
+	if CameraAvailable() then
+		ApplyCameraOffset(db.camara.desplazamiento or 0)
+		pad.applied = db.camara.desplazamiento
+	end
+	PadStatus()
+end
+
+local function StopAllMotion()
+	ReleaseStick()
+	StopTilt()
+	StopTurn()
+end
+
+local function UpdateStick(_, elapsed)
+	if not pad.dragging then
+		if motion.turn and IsMouseButtonDown and not IsMouseButtonDown("LeftButton") then
+			StopTurn()
+		end
+		return
+	end
+	if IsMouseButtonDown and not IsMouseButtonDown("LeftButton") then
+		ReleaseStick()
+		return
+	end
+	local scale = pad.stick:GetEffectiveScale()
+	local x, y = GetCursorPosition()
+	local cx, cy = pad.stick:GetCenter()
+	local dx, dy = x / scale - cx, y / scale - cy
+	local distance = math.sqrt(dx * dx + dy * dy)
+	if distance > STICK_RANGE then
+		dx, dy = dx * STICK_RANGE / distance, dy * STICK_RANGE / distance
+	end
+	pad.knob:ClearAllPoints()
+	pad.knob:SetPoint("CENTER", pad.stick, "CENTER", dx, dy)
+
+	local horizontal, vertical = dx / STICK_RANGE, dy / STICK_RANGE
+	if math.abs(horizontal) >= DEAD_ZONE then
+		ShiftBy(horizontal * SHIFT_SPEED * (elapsed or 0))
+	end
+	Tilt(vertical)
+end
+
+local function Zoom(_, delta)
+	CallIfExists(delta > 0 and "CameraZoomIn" or "CameraZoomOut", 1)
+end
+
+--- Fondo con esquinas redondeadas que se estira a cualquier tamaño.
+local function RoundedBackground(frame)
+	local corner = 12
+	local edge = corner / 32
+	local function Piece(left, right, top, bottom)
+		local texture = frame:CreateTexture(nil, "BACKGROUND")
+		texture:SetTexture(MEDIA .. "panel.tga")
+		texture:SetTexCoord(left, right, top, bottom)
+		return texture
+	end
+	for _, corners in ipairs({ { "TOPLEFT", 0, edge, 0, edge }, { "TOPRIGHT", 1 - edge, 1, 0, edge },
+		{ "BOTTOMLEFT", 0, edge, 1 - edge, 1 }, { "BOTTOMRIGHT", 1 - edge, 1, 1 - edge, 1 } }) do
+		local texture = Piece(corners[2], corners[3], corners[4], corners[5])
+		texture:SetSize(corner, corner)
+		texture:SetPoint(corners[1])
+	end
+	local top = Piece(edge, 1 - edge, 0, edge)
+	top:SetPoint("TOPLEFT", corner, 0)
+	top:SetPoint("BOTTOMRIGHT", frame, "TOPRIGHT", -corner, -corner)
+	local bottom = Piece(edge, 1 - edge, 1 - edge, 1)
+	bottom:SetPoint("TOPLEFT", frame, "BOTTOMLEFT", corner, corner)
+	bottom:SetPoint("BOTTOMRIGHT", -corner, 0)
+	local middle = Piece(0, 1, edge, 1 - edge)
+	middle:SetPoint("TOPLEFT", 0, -corner)
+	middle:SetPoint("BOTTOMRIGHT", 0, corner)
+end
+
+local function MakeButton(parent, size, glyph, hint, flip)
+	local button = CreateFrame("Button", nil, parent)
+	button:SetSize(size, size)
+	if glyph ~= "close" then
+		local background = button:CreateTexture(nil, "BACKGROUND")
+		background:SetAllPoints()
+		background:SetTexture(MEDIA .. "button.tga")
+	end
+	local icon = button:CreateTexture(nil, "ARTWORK")
+	icon:SetPoint("CENTER")
+	icon:SetSize(size * 0.72, size * 0.72)
+	icon:SetTexture(MEDIA .. glyph .. ".tga")
+	if flip then
+		icon:SetTexCoord(1, 0, 0, 1)
+	end
+	button.icon = icon
+	button:SetScript("OnEnter", function()
+		icon:SetVertexColor(unpack(GOLD))
+		PadStatus(hint)
+	end)
+	button:SetScript("OnLeave", function()
+		icon:SetVertexColor(1, 1, 1)
+		PadStatus()
+	end)
+	return button
+end
+
+local function SavePadPosition()
+	local point, _, relativePoint, x, y = pad:GetPoint()
+	local settings = db.joystick
+	settings.point, settings.relativePoint, settings.x, settings.y = point, relativePoint or point, x, y
+end
+
+local function CreatePad()
+	local frame = CreateFrame("Frame", "ModoFotoJoystick")
+	frame:SetSize(168, 236)
+	frame:SetFrameStrata("FULLSCREEN")
+	frame:SetClampedToScreen(true)
+	frame:SetMovable(true)
+	frame:EnableMouse(true)
+	frame:EnableMouseWheel(true)
+	frame:RegisterForDrag("LeftButton")
+	frame:Hide()
+	pad = frame
+	RoundedBackground(frame)
+
+	local function StartMoving()
+		if IsShiftKeyDown() then
+			frame:StartMoving()
+		end
+	end
+	local function StopMoving()
+		frame:StopMovingOrSizing()
+		SavePadPosition()
+	end
+	frame:SetScript("OnDragStart", StartMoving)
+	frame:SetScript("OnDragStop", StopMoving)
+	frame:SetScript("OnMouseWheel", Zoom)
+	frame:SetScript("OnUpdate", UpdateStick)
+	frame:SetScript("OnHide", StopAllMotion)
+
+	local title = frame:CreateFontString(nil, "OVERLAY")
+	title:SetFont(FONT, 12, "OUTLINE")
+	title:SetTextColor(unpack(GOLD))
+	title:SetPoint("TOPLEFT", 12, -9)
+	title:SetText("Cámara")
+
+	local close = MakeButton(frame, 18, "close", "Salir del modo foto")
+	close:SetPoint("TOPRIGHT", -7, -6)
+	close:SetScript("OnClick", function() ModoFoto_Toggle() end)
+	frame.close1 = close
+
+	-- La palanca: a los costados corre la cámara, arriba y abajo la inclina.
+	local stick = CreateFrame("Frame", nil, frame)
+	stick:SetSize(STICK_SIZE, STICK_SIZE)
+	stick:SetPoint("TOP", 0, -28)
+	stick:EnableMouse(true)
+	stick:EnableMouseWheel(true)
+	stick:RegisterForDrag("LeftButton")
+	stick:SetScript("OnDragStart", StartMoving)
+	stick:SetScript("OnDragStop", StopMoving)
+	stick:SetScript("OnMouseWheel", Zoom)
+	local base = stick:CreateTexture(nil, "BORDER")
+	base:SetAllPoints()
+	base:SetTexture(MEDIA .. "base.tga")
+	local knob = stick:CreateTexture(nil, "ARTWORK")
+	knob:SetSize(KNOB_SIZE, KNOB_SIZE)
+	knob:SetTexture(MEDIA .. "knob.tga")
+	frame.stick, frame.knob = stick, knob
+	CenterKnob()
+	stick:SetScript("OnMouseDown", function(_, mouseButton)
+		if mouseButton == "LeftButton" and not IsShiftKeyDown() then
+			frame.dragging = true
+			frame.applied = db.camara.desplazamiento or 0
+		end
+	end)
+	stick:SetScript("OnMouseUp", ReleaseStick)
+	stick:SetScript("OnEnter", function()
+		PadStatus("Correr e inclinar la cámara")
+	end)
+	stick:SetScript("OnLeave", function()
+		if not frame.dragging then
+			PadStatus()
+		end
+	end)
+
+	-- Botones: girar, centrar, foto, girar.
+	local buttons = {
+		{ "rotate", "Girar (mantené apretado)", false, "Left" },
+		{ "center", "Centrar al personaje", false },
+		{ "shot", "Sacar la foto", false },
+		{ "rotate", "Girar (mantené apretado)", true, "Right" },
+	}
+	for index, info in ipairs(buttons) do
+		local button = MakeButton(frame, 30, info[1], info[2], info[3])
+		button:SetPoint("TOP", frame, "TOP", -54 + (index - 1) * 36, -156)
+		if info[4] then
+			button:SetScript("OnMouseDown", function() Turn(info[4]) end)
+			button:SetScript("OnMouseUp", StopTurn)
+		elseif info[1] == "center" then
+			button:SetScript("OnClick", function() MoveCamera(nil) end)
+		else
+			button.icon:SetVertexColor(unpack(GOLD))
+			button:SetScript("OnLeave", function() PadStatus() end)
+			button:SetScript("OnClick", function() ModoFoto_ShotNow() end)
+		end
+		frame[info[1] .. index] = button
+	end
+
+	local status = frame:CreateFontString(nil, "OVERLAY")
+	status:SetFont(FONT, 10, "OUTLINE")
+	status:SetPoint("TOP", 0, -191)
+	status:SetWidth(156)
+	status:SetTextColor(1, 1, 1)
+	frame.status = status
+
+	local hint = frame:CreateFontString(nil, "OVERLAY")
+	hint:SetFont(FONT, 9, "OUTLINE")
+	hint:SetPoint("TOP", 0, -207)
+	hint:SetTextColor(0.75, 0.75, 0.75)
+	hint:SetText("Rueda: acercar o alejar\nMayús+arrastrar: mover")
+
+	return frame
+end
+
+local function ShowPad()
+	if not active or db.joystick.oculto then
+		return
+	end
+	if not pad then
+		CreatePad()
+	end
+	-- Mismo tamaño que la interfaz, aunque no cuelgue de ella.
+	pad:SetScale(UIParent:GetEffectiveScale())
+	local settings = db.joystick
+	pad:ClearAllPoints()
+	pad:SetPoint(settings.point, WorldFrame, settings.relativePoint, settings.x, settings.y)
+	PadStatus()
+	pad:Show()
+end
+
+local function HidePad()
+	if pad then
+		pad:Hide()
+	end
+end
+
 --- Corre la cámara: delta en pasos, o nil para centrar.
-local function MoveCamera(delta)
+function MoveCamera(delta)
 	if not CameraAvailable() then
 		Print("esta versión del juego no permite correr la cámara.")
 		return
@@ -231,9 +573,13 @@ local function MoveCamera(delta)
 	db.camara.desplazamiento = offset
 	if active then
 		ApplyCameraOffset(offset)
-		-- Con la interfaz oculta el chat no se ve: aviso breve en pantalla.
-		-- Se borra solo al sacar la foto.
-		ShowOverlay("Cámara " .. CameraText(), 22, 1.2)
+		if pad and pad:IsShown() then
+			PadStatus()
+		else
+			-- Con la interfaz oculta el chat no se ve: aviso breve en pantalla.
+			-- Se borra solo al sacar la foto.
+			ShowOverlay("Cámara " .. CameraText(), 22, 1.2)
+		end
 	else
 		Print("cámara " .. CameraText() .. " para el modo foto.")
 	end
@@ -292,6 +638,39 @@ local function RestoreLooseFrames()
 end
 
 --------------------------------------------------------------------------------
+-- Impr Pant en el modo foto
+--------------------------------------------------------------------------------
+
+-- En el modo foto, la tecla de captura del juego pasa por el addon: así se
+-- ocultan el control de cámara y los avisos antes de sacar la foto.
+local keyOwner = CreateFrame("Frame")
+ownFrames[keyOwner] = true
+local keysCaptured = false
+local releaseKeysAfterCombat = false
+
+local function CaptureScreenshotKeys()
+	if keysCaptured or not (SetOverrideBinding and GetBindingKey) then
+		return
+	end
+	for _, key in ipairs({ GetBindingKey("SCREENSHOT") }) do
+		SetOverrideBinding(keyOwner, true, key, "MODOFOTO_SHOT")
+	end
+	keysCaptured = true
+end
+
+local function ReleaseScreenshotKeys()
+	if not keysCaptured then
+		return
+	end
+	if InCombatLockdown() then
+		releaseKeysAfterCombat = true
+		return
+	end
+	ClearOverrideBindings(keyOwner)
+	keysCaptured = false
+end
+
+--------------------------------------------------------------------------------
 -- Entrar y salir
 --------------------------------------------------------------------------------
 
@@ -316,6 +695,7 @@ local function Enter()
 	ApplyCamera()
 	SetUIVisibility(false)
 	HideLooseFrames()
+	CaptureScreenshotKeys()
 	return true
 end
 
@@ -325,11 +705,13 @@ local function Exit()
 	shotPending = false
 	exitAfterShot = false
 	overlay:Hide()
+	HidePad()
 
 	if not active then
 		return
 	end
 	active = false
+	ReleaseScreenshotKeys()
 	RestoreSettings()
 	RestoreLooseFrames()
 
@@ -348,6 +730,8 @@ local function FinishShot()
 	shotPending = false
 	if exitAfterShot then
 		Exit()
+	else
+		ShowPad()
 	end
 end
 
@@ -356,6 +740,7 @@ local function TakeShot()
 	local id = shotId
 	shotPending = true
 	overlay:Hide()
+	HidePad()
 
 	-- Si la cámara se está corriendo, se espera a que termine; después, tres
 	-- cuadros: lo justo para que el juego ya dibuje sin interfaz.
@@ -385,7 +770,8 @@ local function Toggle()
 	if active then
 		Exit()
 	elseif Enter() then
-		ShowOverlay("Modo foto: Impr Pant para capturar, Esc para salir", 24, 3)
+		ShowPad()
+		ShowOverlay("Modo foto: Impr Pant o el botón de la cámara para la foto, Esc para salir", 24, 3)
 	end
 end
 
@@ -414,6 +800,7 @@ local function ShotWithTimer(seconds)
 		return
 	end
 	exitAfterShot = not wasActive
+	ShowPad() -- para acomodar la cámara durante la cuenta regresiva
 
 	local remaining = seconds
 	ShowOverlay(tostring(remaining), 72)
@@ -450,6 +837,12 @@ ModoFoto_ShotWithTimer = ShotWithTimer
 ModoFoto_CameraLeft = function() MoveCamera(-CAMERA_STEP) end
 ModoFoto_CameraRight = function() MoveCamera(CAMERA_STEP) end
 ModoFoto_CameraCenter = function() MoveCamera(nil) end
+ModoFoto_ToggleJoystick = function()
+	db.joystick.oculto = not db.joystick.oculto
+	if db.joystick.oculto then HidePad() else ShowPad() end
+	Print(db.joystick.oculto and "control de cámara oculto. Volvé a mostrarlo con /foto joystick."
+		or "en el modo foto aparece el control de cámara.")
+end
 
 --------------------------------------------------------------------------------
 -- Botón en pantalla
@@ -529,6 +922,8 @@ local function PrintHelp()
 	DEFAULT_CHAT_FRAME:AddMessage("  /foto boton  -  muestra u oculta el botón")
 	DEFAULT_CHAT_FRAME:AddMessage("  /foto camara izquierda | derecha | centro | <número de -3 a 3>  -  cámara corrida a un costado")
 	DEFAULT_CHAT_FRAME:AddMessage("  /foto lejos  -  permitir o no alejar la cámara más que lo normal")
+	DEFAULT_CHAT_FRAME:AddMessage("  /foto joystick  -  muestra u oculta el control de cámara del modo foto")
+	DEFAULT_CHAT_FRAME:AddMessage("  /foto joystick invertir  -  invierte arriba y abajo de la palanca")
 	DEFAULT_CHAT_FRAME:AddMessage("  /foto calidad  -  capturas en PNG con la máxima calidad")
 	DEFAULT_CHAT_FRAME:AddMessage("  Atajos (foto, temporizador, correr la cámara): Opciones > Atajos de teclado > AddOns > Modo Foto")
 end
@@ -572,6 +967,13 @@ SlashCmdList.MODOFOTO = function(input)
 			MoveCamera(target - current)
 		else
 			Print("cámara " .. CameraText() .. " para el modo foto. Ejemplos: /foto camara izquierda, /foto camara 2")
+		end
+	elseif command == "joystick" or command == "control" then
+		if argument == "invertir" then
+			db.joystick.invertir = not db.joystick.invertir
+			Print(db.joystick.invertir and "palanca invertida: arriba baja la cámara." or "palanca normal: arriba sube la cámara.")
+		else
+			ModoFoto_ToggleJoystick()
 		end
 	elseif command == "lejos" then
 		db.camara.alejar = not db.camara.alejar
@@ -642,6 +1044,10 @@ events:SetScript("OnEvent", function(self, event, arg1)
 			Print("cancelado: entraste en combate.")
 		end
 	elseif event == "PLAYER_REGEN_ENABLED" then
+		if releaseKeysAfterCombat then
+			releaseKeysAfterCombat = false
+			ReleaseScreenshotKeys()
+		end
 		if restoreAfterCombat then
 			restoreAfterCombat = false
 			RestoreSettings()
@@ -652,9 +1058,12 @@ events:SetScript("OnEvent", function(self, event, arg1)
 		end
 	elseif event == "SCREENSHOT_STARTED" then
 		overlay:Hide()
+		HidePad()
 	elseif event == "SCREENSHOT_SUCCEEDED" or event == "SCREENSHOT_FAILED" then
 		if shotPending then
 			FinishShot()
+		elseif active and not countdownTicker then
+			ShowPad()
 		end
 	end
 end)
