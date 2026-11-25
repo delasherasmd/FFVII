@@ -1,7 +1,7 @@
 ## Interface: 11508, 11509, 16001
 ## Title: Barra Libre
-## Notes: Barras propias (hasta 6, horizontales o verticales) para pociones, objetos, hechizos y macros, con teclas del teclado, y una barra de clase (tótems, auras, aspectos, venenos...). Funcionan aunque juegues con mando.
-## Version: 1.1.0
+## Notes: Barras propias (hasta 6, horizontales o verticales) para pociones, objetos, hechizos y macros, con teclas del teclado, y la barra especial de tu clase (tótems, mascota, posturas). Funcionan aunque juegues con mando.
+## Version: 1.2.0
 ## SavedVariablesPerCharacter: BarraLibreDB
 
 ClassSpells.lua

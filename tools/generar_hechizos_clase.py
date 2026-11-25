@@ -1,4 +1,7 @@
-"""Genera BarraLibre/ClassSpells.lua: los grupos de la barra de clase con los números de cada rango.
+"""Genera BarraLibre/ClassSpells.lua: los tótems del chamán por elemento, con los números de cada rango.
+
+Es lo único que la barra de clase necesita de la base: las demás clases usan la barra de la mascota
+o la de posturas, que el juego ya sabe armar.
 
 Uso:
     python3 tools/generar_hechizos_clase.py ClassicDB_1_12_1_zXXXX.sql[.gz] BarraLibre/ClassSpells.lua
@@ -19,7 +22,7 @@ SOURCE, OUTPUT = Path(sys.argv[1]), Path(sys.argv[2])
 FAMILY = {"MAGE": 3, "WARRIOR": 4, "WARLOCK": 5, "PRIEST": 6, "DRUID": 7, "ROGUE": 8, "HUNTER": 9,
           "PALADIN": 10, "SHAMAN": 11}
 
-# Grupos por clase: clave, nombre en la barra, ícono si no hay ninguno elegido, opciones (en orden de uso).
+# Grupos: clave, nombre en la barra, opciones (en orden de uso).
 GROUPS = {
     "SHAMAN": [
         ("tierra", "Tierra", ["Strength of Earth Totem", "Stoneskin Totem", "Tremor Totem", "Earthbind Totem",
@@ -31,62 +34,7 @@ GROUPS = {
         ("aire", "Aire", ["Windfury Totem", "Grace of Air Totem", "Grounding Totem", "Tranquil Air Totem",
                           "Nature Resistance Totem", "Windwall Totem", "Sentry Totem"]),
     ],
-    "PALADIN": [
-        ("aura", "Aura", ["Devotion Aura", "Retribution Aura", "Concentration Aura", "Sanctity Aura",
-                          "Shadow Resistance Aura", "Frost Resistance Aura", "Fire Resistance Aura"]),
-        ("sello", "Sello", ["Seal of Righteousness", "Seal of Command", "Seal of the Crusader", "Seal of Wisdom",
-                            "Seal of Light", "Seal of Justice"]),
-        ("bendicion", "Bendición", ["Blessing of Might", "Blessing of Wisdom", "Blessing of Kings",
-                                    "Blessing of Salvation", "Blessing of Light", "Blessing of Sanctuary",
-                                    "Blessing of Freedom", "Blessing of Protection", "Blessing of Sacrifice"]),
-        ("superior", "Bendición superior", ["Greater Blessing of Might", "Greater Blessing of Wisdom",
-                                            "Greater Blessing of Kings", "Greater Blessing of Salvation",
-                                            "Greater Blessing of Light", "Greater Blessing of Sanctuary"]),
-    ],
-    "HUNTER": [
-        ("aspecto", "Aspecto", ["Aspect of the Hawk", "Aspect of the Monkey", "Aspect of the Cheetah",
-                                "Aspect of the Pack", "Aspect of the Wild", "Aspect of the Beast"]),
-        ("picadura", "Picadura", ["Serpent Sting", "Viper Sting", "Scorpid Sting", "Wyvern Sting"]),
-        ("trampa", "Trampa", ["Freezing Trap", "Immolation Trap", "Frost Trap", "Explosive Trap"]),
-        ("mascota", "Mascota", ["Mend Pet", "Call Pet", "Revive Pet", "Dismiss Pet", "Feed Pet"]),
-    ],
-    "MAGE": [
-        ("armadura", "Armadura", ["Mage Armor", "Ice Armor", "Frost Armor"]),
-        ("intelecto", "Intelecto", ["Arcane Intellect", "Arcane Brilliance", "Amplify Magic", "Dampen Magic"]),
-        ("conjurar", "Conjurar", ["Conjure Water", "Conjure Food", "Conjure Mana Ruby", "Conjure Mana Citrine",
-                                  "Conjure Mana Jade", "Conjure Mana Agate"]),
-        ("viaje", "Teletransporte", ["Teleport: Stormwind", "Teleport: Ironforge", "Teleport: Darnassus",
-                                     "Teleport: Orgrimmar", "Teleport: Undercity", "Teleport: Thunder Bluff",
-                                     "Portal: Stormwind", "Portal: Ironforge", "Portal: Darnassus",
-                                     "Portal: Orgrimmar", "Portal: Undercity", "Portal: Thunder Bluff"]),
-    ],
-    "WARLOCK": [
-        ("demonio", "Demonio", ["Summon Imp", "Summon Voidwalker", "Summon Succubus", "Summon Felhunter"]),
-        ("armadura", "Armadura", ["Demon Armor", "Demon Skin"]),
-        ("piedra", "Piedra", ["Create Healthstone*", "Create Soulstone*", "Create Spellstone*",
-                              "Create Firestone*"]),
-        ("maldicion", "Maldición", ["Curse of Agony", "Curse of the Elements", "Curse of Shadow",
-                                    "Curse of Recklessness", "Curse of Weakness", "Curse of Tongues",
-                                    "Curse of Exhaustion", "Curse of Doom"]),
-    ],
-    "PRIEST": [
-        ("entereza", "Entereza", ["Power Word: Fortitude", "Prayer of Fortitude"]),
-        ("espiritu", "Espíritu", ["Divine Spirit", "Prayer of Spirit"]),
-        ("sombras", "Sombras", ["Shadow Protection", "Prayer of Shadow Protection", "Fear Ward"]),
-        ("fuego", "Fuego interno", ["Inner Fire"]),
-    ],
-    "DRUID": [
-        ("marca", "Marca", ["Mark of the Wild", "Gift of the Wild"]),
-        ("espinas", "Espinas", ["Thorns", "Omen of Clarity"]),
-    ],
-    "WARRIOR": [
-        ("grito", "Grito", ["Battle Shout", "Demoralizing Shout", "Challenging Shout"]),
-        ("ira", "Ira", ["Bloodrage", "Berserker Rage"]),
-    ],
 }
-# Pícaro: venenos (objetos), uno por arma.
-POISONS = ["Instant Poison", "Deadly Poison", "Crippling Poison", "Mind-numbing Poison", "Wound Poison"]
-
 TOKEN = re.compile(r"'(?:[^'\\]|\\.)*'|NULL|-?[0-9.eE+-]+|[(),]")
 
 
@@ -175,24 +123,6 @@ for class_file, groups in GROUPS.items():
                 missing.append(f"{class_file}: {name}")
         lines.append(f'\t\t{{ "{key}", "{label}", {{ {", ".join(options)} }} }},')
     lines.append("\t},")
-# Venenos: objetos, de menor a mayor nivel.
-poison_items = defaultdict(list)
-for r in DB["item_template"]:
-    for base in POISONS:
-        if r["class"] == 0 and re.fullmatch(re.escape(base) + r"( [IVX]+)?", r["name"] or ""):
-            poison_items[base].append((r["RequiredLevel"], r["entry"]))
-options = []
-for base in POISONS:
-    ids = [entry for _, entry in sorted(poison_items[base])]
-    if ids:
-        options.append(f'{{ "{base}", {{ {", ".join(map(str, ids))} }} }}')
-    else:
-        missing.append(f"ROGUE: {base}")
-poison_list = ", ".join(options)
-lines.append("\tROGUE = {")
-lines.append(f'\t\t{{ "veneno1", "Veneno: mano principal", {{ {poison_list} }}, items = true, slot = 16 }},')
-lines.append(f'\t\t{{ "veneno2", "Veneno: mano secundaria", {{ {poison_list} }}, items = true, slot = 17 }},')
-lines.append("\t},")
 lines.append("}")
 OUTPUT.write_text("\n".join(lines) + "\n", encoding="utf-8")
 print("Escrito", OUTPUT)

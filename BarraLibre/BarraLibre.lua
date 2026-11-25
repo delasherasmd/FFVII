@@ -2,8 +2,8 @@
 -- usan de vez en cuando, con teclas del teclado. Funciona aunque juegues con
 -- mando (el modo mando del juego o ConsolePort): es independiente de las barras
 -- de acción y de las asignaciones del mando.
--- Hasta 6 barras, cada una horizontal o vertical, y una barra de clase (tótems,
--- auras, aspectos...) que se arma sola con lo que tu personaje conoce.
+-- Hasta 6 barras, cada una horizontal o vertical, y la barra especial de tu clase
+-- (tótems del chamán, mascota del cazador y del brujo, posturas y formas).
 -- WoW Classic Era (1.15) y WoW Forever (1.60).
 
 local ADDON_NAME = ...
@@ -118,10 +118,19 @@ local function BarOf(index)
 end
 
 --------------------------------------------------------------------------------
--- Barra de clase: grupos de hechizos (o venenos) con uno elegido en cada uno
+-- Barra de clase: la barra especial que trae cada clase
+--   chamán: tótems (uno elegido por elemento y "todos", como la barra de tótems)
+--   cazador y brujo: la barra de la mascota
+--   guerrero, druida, pícaro (y paladín o sacerdote si el juego les da): posturas y formas
+--   mago: no tiene
 --------------------------------------------------------------------------------
 
-local classGroups = {} -- [n] = {key, label, options = {{key, id}}, chosen, items, slot, all}
+local CLASS_MODES = { SHAMAN = "totems", HUNTER = "pet", WARLOCK = "pet", WARRIOR = "stance", DRUID = "stance",
+	ROGUE = "stance", PALADIN = "stance", PRIEST = "stance" }
+local NUM_PET_SLOTS = 10
+local classMode            -- "totems", "pet", "stance" o nil
+local classGroups = {}     -- tótems: [n] = {key, label, options = {{key, id}}, chosen, all}
+local stanceCount = 0
 
 local function SpellKnown(spellId)
 	return (IsPlayerSpell and IsPlayerSpell(spellId)) or (IsSpellKnown and IsSpellKnown(spellId)) or false
@@ -136,27 +145,24 @@ local function BestRank(ids)
 	end
 end
 
---- El veneno de más nivel que tenés en las bolsas.
-local function BestItem(ids)
-	for i = #ids, 1, -1 do
-		if (GetItemCount(ids[i]) or 0) > 0 then
-			return ids[i]
-		end
-	end
-end
-
---- Arma la barra de clase con lo que el personaje conoce ahora.
+--- Arma la barra de clase con lo que el personaje tiene ahora.
 local function ScanClass()
 	wipe(classGroups)
+	stanceCount = 0
 	local _, classFile = UnitClass("player")
-	local data = BarraLibreClassSpells and BarraLibreClassSpells[classFile]
-	if not data then
+	classMode = CLASS_MODES[classFile]
+	if classMode == "stance" then
+		stanceCount = math.min(PER_BAR, GetNumShapeshiftForms and GetNumShapeshiftForms() or 0)
+		return
+	elseif classMode ~= "totems" then
 		return
 	end
+	local data = BarraLibreClassSpells and BarraLibreClassSpells.SHAMAN or {}
+	local any = false
 	for n, group in ipairs(data) do
 		local options = {}
 		for _, family in ipairs(group[3]) do
-			local id = group.items and BestItem(family[2]) or BestRank(family[2])
+			local id = BestRank(family[2])
 			if id then
 				options[#options + 1] = { key = family[1], id = id }
 			end
@@ -167,31 +173,41 @@ local function ScanClass()
 				chosen = option
 			end
 		end
-		classGroups[n] = { key = group[1], label = group[2], options = options, chosen = chosen,
-			items = group.items, slot = group.slot }
+		any = any or chosen ~= nil
+		classGroups[n] = { key = group[1], label = group[2], options = options, chosen = chosen }
 	end
-	-- Chamán: un botón más que pone los tótems elegidos, uno por pulsación.
-	if classFile == "SHAMAN" then
-		local any = false
-		for _, group in ipairs(classGroups) do
-			if group.chosen then any = true end
-		end
-		classGroups[#classGroups + 1] = { key = "todos", label = "Todos los tótems", options = {}, all = true,
-			chosen = any and { key = "todos" } or nil }
-	end
+	-- Un botón más que pone los tótems elegidos, uno por pulsación.
+	classGroups[#classGroups + 1] = { key = "todos", label = "Todos los tótems", options = {}, all = true,
+		chosen = any and { key = "todos" } or nil }
 end
 
+--- Grupo de tótems de un botón (solo en la barra del chamán).
 local function ClassGroup(index)
 	local bar, n = BarOf(index)
-	return bar == CLASS_BAR and classGroups[n] or nil
+	return bar == CLASS_BAR and classMode == "totems" and classGroups[n] or nil
+end
+
+--- Cuántos botones tiene ahora la barra de clase.
+local function ClassButtonCount()
+	if classMode == "pet" then
+		return NUM_PET_SLOTS
+	elseif classMode == "stance" then
+		return stanceCount
+	end
+	return #classGroups
 end
 
 --- ¿El botón está en uso? (su barra está entre las elegidas y él entre los botones de la barra)
 local function IsActive(index)
 	local bar, n = BarOf(index)
 	if bar == CLASS_BAR then
-		local group = classGroups[n]
-		return db.classBar and group ~= nil and group.chosen ~= nil
+		if not db.classBar or not classMode then
+			return false
+		elseif classMode == "totems" then
+			local group = classGroups[n]
+			return group ~= nil and group.chosen ~= nil
+		end
+		return n <= ClassButtonCount()
 	end
 	return bar <= db.numBars and n <= db.bars[bar].count
 end
@@ -258,13 +274,23 @@ end
 -- Contenido de los botones
 --------------------------------------------------------------------------------
 
---- Lo que hay en un botón: lo que pusiste, o lo elegido en su grupo de la barra de clase.
+--- Lo que hay en un botón: lo que pusiste, o lo que corresponde en la barra de clase.
 local function SlotFor(index)
-	local group = ClassGroup(index)
-	if not group then
+	local bar, n = BarOf(index)
+	if bar ~= CLASS_BAR then
 		return db.slots[index]
 	end
-	if not group.chosen then
+	if classMode == "pet" then
+		return n <= NUM_PET_SLOTS and { kind = "pet", slot = n } or nil
+	elseif classMode == "stance" then
+		if n > stanceCount then
+			return nil
+		end
+		local icon, active, castable, spellId = GetShapeshiftFormInfo(n)
+		return { kind = "stance", slot = n, icon = icon, active = active, castable = castable, id = spellId }
+	end
+	local group = classGroups[n]
+	if not group or not group.chosen then
 		return nil
 	end
 	if group.all then
@@ -278,8 +304,6 @@ local function SlotFor(index)
 		end
 		return { kind = "macrotext", text = "/castsequence reset=combat/12 " .. table.concat(names, ", "),
 			icon = icon, label = "todos" }
-	elseif group.items then
-		return { kind = "poison", id = group.chosen.id, slot = group.slot }
 	end
 	return { kind = "spell", id = group.chosen.id }
 end
@@ -288,8 +312,16 @@ local function SlotIcon(slot)
 	if not slot then
 		return nil
 	end
-	if slot.kind == "item" or slot.kind == "poison" then
+	if slot.kind == "item" then
 		return GetItemIcon(slot.id)
+	elseif slot.kind == "pet" then
+		local _, texture, isToken = GetPetActionInfo(slot.slot)
+		if isToken and texture then
+			return _G[texture] or texture
+		end
+		return texture
+	elseif slot.kind == "stance" then
+		return slot.icon
 	elseif slot.kind == "spell" then
 		return SpellTexture(slot.id)
 	elseif slot.kind == "macro" then
@@ -308,17 +340,31 @@ local function ApplyAction(button)
 	button:SetAttribute("macro", nil)
 	button:SetAttribute("macrotext", nil)
 	button:SetAttribute("type1", nil)
-	if ClassGroup(button.index) then
-		-- Barra de clase: solo el clic izquierdo (y la tecla) usan el botón; el derecho elige.
+	if BarOf(button.index) == CLASS_BAR then
+		-- Barra de clase: el clic izquierdo (y la tecla) usan el botón; el derecho elige el tótem o,
+		-- en la barra de la mascota, activa o desactiva el lanzamiento automático.
 		button:SetAttribute("type", nil)
+		button:SetAttribute("type2", nil)
+		button:SetAttribute("macrotext2", nil)
+		button:SetAttribute("action", nil)
 		if binding or not slot then
 			return
+		elseif slot.kind == "pet" then
+			button:SetAttribute("type1", "pet")
+			button:SetAttribute("action", slot.slot)
+			local name, _, isToken, _, autoCastAllowed = GetPetActionInfo(slot.slot)
+			if autoCastAllowed and name and not isToken then
+				button:SetAttribute("type2", "macro")
+				button:SetAttribute("macrotext2", "/petautocasttoggle " .. name)
+			end
+		elseif slot.kind == "stance" then
+			if slot.id then
+				button:SetAttribute("type1", "spell")
+				button:SetAttribute("spell", slot.id)
+			end
 		elseif slot.kind == "spell" then
 			button:SetAttribute("type1", "spell")
 			button:SetAttribute("spell", slot.id)
-		elseif slot.kind == "poison" then
-			button:SetAttribute("type1", "macro")
-			button:SetAttribute("macrotext", format("/use item:%d\n/use %d", slot.id, slot.slot))
 		elseif slot.kind == "macrotext" then
 			button:SetAttribute("type1", "macro")
 			button:SetAttribute("macrotext", slot.text)
@@ -342,10 +388,14 @@ end
 local function UpdateCooldown(button)
 	local slot = SlotFor(button.index)
 	local start, duration
-	if slot and (slot.kind == "item" or slot.kind == "poison") then
+	if slot and slot.kind == "item" then
 		start, duration = ItemCooldown(slot.id)
 	elseif slot and slot.kind == "spell" then
 		start, duration = SpellCooldown(slot.id)
+	elseif slot and slot.kind == "pet" then
+		start, duration = GetPetActionCooldown(slot.slot)
+	elseif slot and slot.kind == "stance" and GetShapeshiftFormCooldown then
+		start, duration = GetShapeshiftFormCooldown(slot.slot)
 	end
 	if start and duration and duration > 1.5 then
 		button.cooldown:SetCooldown(start, duration)
@@ -362,7 +412,23 @@ local function UpdateButton(button)
 	button.icon:SetDesaturated(false)
 	button.icon:SetVertexColor(1, 1, 1)
 	button.count:SetText(slot and slot.label or "")
-	if slot and (slot.kind == "item" or slot.kind == "poison") then
+	button.activeGlow:Hide()
+	if slot and slot.kind == "pet" then
+		local _, _, _, isActive, _, autoCastEnabled = GetPetActionInfo(slot.slot)
+		button.activeGlow:SetShown(isActive and true or false)
+		if autoCastEnabled then
+			button.count:SetText("|cffffd100auto|r")
+		end
+		if GetPetActionSlotUsable and not GetPetActionSlotUsable(slot.slot) then
+			button.icon:SetDesaturated(true)
+		end
+	elseif slot and slot.kind == "stance" then
+		button.activeGlow:SetShown(slot.active and true or false)
+		if not slot.castable then
+			button.icon:SetVertexColor(0.4, 0.4, 0.4)
+		end
+	end
+	if slot and slot.kind == "item" then
 		local count = GetItemCount(slot.id) or 0
 		local _, _, _, _, _, _, _, stack = GetItemInfo(slot.id)
 		if count ~= 1 or (stack and stack > 1) then
@@ -447,7 +513,7 @@ end
 
 --- Pone en el botón lo que hay en el cursor; lo que había queda en el cursor.
 local function DropOnButton(button)
-	if ClassGroup(button.index) or BarOf(button.index) == CLASS_BAR then
+	if BarOf(button.index) == CLASS_BAR then
 		return -- la barra de clase se arma sola
 	end
 	if InCombatLockdown() then
@@ -479,10 +545,14 @@ local function ShowTooltip(button)
 	local slot = SlotFor(button.index)
 	local group = ClassGroup(button.index)
 	GameTooltip:SetOwner(button, "ANCHOR_TOP")
-	if group and group.all then
+	if slot and slot.kind == "pet" then
+		GameTooltip:SetPetAction(slot.slot)
+	elseif slot and slot.kind == "stance" then
+		GameTooltip:SetShapeshift(slot.slot)
+	elseif group and group.all then
 		GameTooltip:AddLine("Todos los tótems elegidos", 1, 1, 1)
 		GameTooltip:AddLine("Cada pulsación pone el siguiente.", 0.8, 0.8, 0.8)
-	elseif slot and (slot.kind == "item" or slot.kind == "poison") then
+	elseif slot and slot.kind == "item" then
 		GameTooltip:SetItemByID(slot.id)
 	elseif slot and slot.kind == "spell" then
 		GameTooltip:SetSpellByID(slot.id)
@@ -496,7 +566,12 @@ local function ShowTooltip(button)
 	local key = KeyFor(button.index)
 	local place = bar == CLASS_BAR and format("Barra de clase, botón %d", n) or format("Barra %d, botón %d", bar, n)
 	GameTooltip:AddLine(format("%s. %s", place, key and ("Tecla: " .. key) or "Sin tecla: /barra teclas"), 0.4, 0.8, 1)
-	if group then
+	if slot and slot.kind == "pet" then
+		local _, _, _, _, autoCastAllowed = GetPetActionInfo(slot.slot)
+		if autoCastAllowed then
+			GameTooltip:AddLine("Clic derecho: lanzamiento automático sí o no", 0.6, 0.6, 0.6)
+		end
+	elseif group then
 		if not group.all then
 			GameTooltip:AddLine("Clic derecho: elegir " .. group.label:lower(), 0.6, 0.6, 0.6)
 		end
@@ -557,11 +632,7 @@ local function CreatePicker()
 		end)
 		option:SetScript("OnEnter", function(self)
 			GameTooltip:SetOwner(self, "ANCHOR_TOP")
-			if picker.group.items then
-				GameTooltip:SetItemByID(self.option.id)
-			else
-				GameTooltip:SetSpellByID(self.option.id)
-			end
+			GameTooltip:SetSpellByID(self.option.id)
 			GameTooltip:Show()
 		end)
 		option:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -590,7 +661,7 @@ local function OpenPicker(button)
 		local data = group.options[i]
 		if data then
 			option.option = data
-			option.icon:SetTexture(group.items and GetItemIcon(data.id) or SpellTexture(data.id))
+			option.icon:SetTexture(SpellTexture(data.id))
 			option.mark:SetShown(group.chosen == data)
 			option:Show()
 		else
@@ -648,6 +719,12 @@ local function CreateButton(index)
 		_G.NumberFontNormalSmallGray and "NumberFontNormalSmallGray" or "GameFontHighlightSmall")
 	button.hotkey:SetPoint("TOPRIGHT", -2, -3)
 	button.hotkey:SetJustifyH("RIGHT")
+
+	button.activeGlow = overlay:CreateTexture(nil, "OVERLAY")
+	button.activeGlow:SetAllPoints()
+	button.activeGlow:SetTexture("Interface\\Buttons\\CheckButtonHilight")
+	button.activeGlow:SetBlendMode("ADD")
+	button.activeGlow:Hide()
 
 	button.bindGlow = overlay:CreateTexture(nil, "OVERLAY")
 	button.bindGlow:SetPoint("TOPLEFT", -2, 2)
@@ -778,10 +855,18 @@ local function LayoutBar(bar)
 	else
 		inUse = bar <= db.numBars
 	end
-	if inUse and not settings.hidden then
-		frame:Show()
+	if bar == CLASS_BAR and classMode == "pet" and inUse and not settings.hidden then
+		-- La barra de la mascota se muestra sola cuando tenés mascota, también en combate.
+		RegisterStateDriver(frame, "visibility", "[pet] show; hide")
 	else
-		frame:Hide()
+		if bar == CLASS_BAR then
+			UnregisterStateDriver(frame, "visibility")
+		end
+		if inUse and not settings.hidden then
+			frame:Show()
+		else
+			frame:Hide()
+		end
 	end
 end
 
@@ -1055,9 +1140,10 @@ local function PrintHelp()
 		"/barra [barra] poner <botón> <objeto>  -  nombre del objeto o Mayús+clic en él",
 		"/barra [barra] quitar <botón | todo>  -  vaciar",
 		"/barra bloquear  -  fijar las barras (para sacar algo: Mayús+arrastrar)",
-		"/barra clase  -  mostrar u ocultar la barra de clase (tótems, auras, aspectos...)",
+		"/barra clase  -  mostrar u ocultar la barra de clase: tótems (chamán), mascota (cazador, brujo),",
+		"      posturas y formas (guerrero, druida, pícaro...). El mago no tiene.",
 		"/barra clase vertical | escala 1.2 | tecla 1 F5 | centrar  -  lo mismo que las otras barras",
-		"En la barra de clase: clic derecho en un botón para elegir qué usa.",
+		"Tótems: clic derecho en un elemento para elegir el tótem. Mascota: clic derecho, lanzamiento automático.",
 	}
 	for _, line in ipairs(lines) do
 		DEFAULT_CHAT_FRAME:AddMessage("  " .. line)
@@ -1119,13 +1205,13 @@ local function HandleSlash(input)
 	local keyButton, keyName = rest:match("^(%d+)%s+(%S+)$")
 	if bar == CLASS_BAR and (command == "botones" or command == "poner" or command == "quitar"
 		or command == "vaciar" or command == "limpiar") then
-		Print("la barra de clase se arma sola con lo que conoce tu personaje. Clic derecho en un botón para elegir.")
+		Print("la barra de clase se arma sola, como la barra especial de tu clase.")
 		return
 	end
 	if (command == "tecla" or command == "teclas") and keyButton then
 		-- Sin mouse (por ejemplo, con el mando): /barra tecla 3 SHIFT-1
 		keyButton = tonumber(keyButton)
-		local limit = bar == CLASS_BAR and #classGroups or settings.count
+		local limit = bar == CLASS_BAR and ClassButtonCount() or settings.count
 		if keyButton < 1 or keyButton > limit then
 			Print(format("la barra %s tiene botones del 1 al %d.", bar == CLASS_BAR and "de clase" or bar, limit))
 		elseif not NotInCombat() then
@@ -1277,7 +1363,9 @@ events:RegisterEvent("PLAYER_REGEN_ENABLED")
 events:RegisterEvent("PLAYER_REGEN_DISABLED")
 for _, event in ipairs({ "BAG_UPDATE_DELAYED", "BAG_UPDATE_COOLDOWN", "SPELL_UPDATE_COOLDOWN", "UPDATE_BINDINGS",
 	"GET_ITEM_INFO_RECEIVED", "UPDATE_MACROS", "PLAYER_ENTERING_WORLD", "SPELL_UPDATE_USABLE", "SPELLS_CHANGED",
-	"LEARNED_SPELL_IN_TAB" }) do
+	"LEARNED_SPELL_IN_TAB", "PET_BAR_UPDATE", "PET_BAR_UPDATE_COOLDOWN", "PET_BAR_UPDATE_USABLE", "PET_UI_UPDATE",
+	"UNIT_PET", "PLAYER_CONTROL_LOST", "PLAYER_CONTROL_GAINED", "UPDATE_SHAPESHIFT_FORMS", "UPDATE_SHAPESHIFT_FORM",
+	"UPDATE_SHAPESHIFT_USABLE", "UPDATE_SHAPESHIFT_COOLDOWN" }) do
 	pcall(events.RegisterEvent, events, event)
 end
 
@@ -1311,11 +1399,28 @@ events:SetScript("OnEvent", function(_, event, arg1)
 			Print("arrastrá pociones u objetos a la barra, o escribí /barra auto. /barra teclas para elegir las teclas,"
 				.. " /barra barras <n> para tener más barras.")
 		end
-	elseif event == "SPELLS_CHANGED" or event == "LEARNED_SPELL_IN_TAB" then
-		-- Aprendiste algo (o un rango nuevo): la barra de clase se rearma.
+	elseif event == "PET_BAR_UPDATE" or event == "PET_UI_UPDATE" or (event == "UNIT_PET" and arg1 == "player") then
+		-- Mascota nueva o habilidades distintas: íconos ya; el clic derecho (automático), fuera de combate.
+		if classMode == "pet" then
+			if InCombatLockdown() then
+				pendingSetup = true
+			else
+				RefreshClassButtons()
+			end
+			QueueRefresh()
+		end
+	elseif event == "PET_BAR_UPDATE_COOLDOWN" or event == "UPDATE_SHAPESHIFT_COOLDOWN" then
+		UpdateCooldowns()
+	elseif event == "SPELLS_CHANGED" or event == "LEARNED_SPELL_IN_TAB" or event == "UPDATE_SHAPESHIFT_FORMS" then
+		-- Aprendiste algo (un rango, una forma nueva): la barra de clase se rearma.
 		ScanClass()
-		Layout()
-		SetupButtons()
+		if InCombatLockdown() then
+			pendingSetup = true
+			QueueRefresh()
+		else
+			Layout()
+			SetupButtons()
+		end
 	elseif event == "PLAYER_REGEN_DISABLED" then
 		if picker:IsShown() then
 			picker:Hide()
@@ -1331,16 +1436,7 @@ events:SetScript("OnEvent", function(_, event, arg1)
 			Layout()
 			SetupButtons()
 		end
-	elseif event == "BAG_UPDATE_DELAYED" and select(2, UnitClass("player")) == "ROGUE" then
-		-- Venenos: lo que hay en las bolsas cambia la barra de clase.
-		ScanClass()
-		if InCombatLockdown() then
-			pendingSetup = true
-			QueueRefresh()
-		else
-			Layout()
-			SetupButtons()
-		end
+
 	elseif event == "BAG_UPDATE_COOLDOWN" or event == "SPELL_UPDATE_COOLDOWN" then
 		UpdateCooldowns()
 	elseif event == "UPDATE_MACROS" then
