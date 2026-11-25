@@ -74,4 +74,16 @@
 	<Binding name="CLICK BarraLibreBoton70:LeftButton" category="ADDONS"/>
 	<Binding name="CLICK BarraLibreBoton71:LeftButton" category="ADDONS"/>
 	<Binding name="CLICK BarraLibreBoton72:LeftButton" category="ADDONS"/>
+	<Binding name="CLICK BarraLibreBoton73:LeftButton" category="ADDONS"/>
+	<Binding name="CLICK BarraLibreBoton74:LeftButton" category="ADDONS"/>
+	<Binding name="CLICK BarraLibreBoton75:LeftButton" category="ADDONS"/>
+	<Binding name="CLICK BarraLibreBoton76:LeftButton" category="ADDONS"/>
+	<Binding name="CLICK BarraLibreBoton77:LeftButton" category="ADDONS"/>
+	<Binding name="CLICK BarraLibreBoton78:LeftButton" category="ADDONS"/>
+	<Binding name="CLICK BarraLibreBoton79:LeftButton" category="ADDONS"/>
+	<Binding name="CLICK BarraLibreBoton80:LeftButton" category="ADDONS"/>
+	<Binding name="CLICK BarraLibreBoton81:LeftButton" category="ADDONS"/>
+	<Binding name="CLICK BarraLibreBoton82:LeftButton" category="ADDONS"/>
+	<Binding name="CLICK BarraLibreBoton83:LeftButton" category="ADDONS"/>
+	<Binding name="CLICK BarraLibreBoton84:LeftButton" category="ADDONS"/>
 </Bindings>

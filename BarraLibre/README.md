@@ -4,6 +4,8 @@ Addon para **WoW Forever** y **WoW Classic Era**: barras propias para pociones, 
 
 Podés tener **hasta 6 barras**, cada una **horizontal o vertical**, con 1 a 12 botones, en una o varias filas (o columnas).
 
+Además, una **barra de clase** que se arma sola con lo que tu personaje conoce: los tótems del chamán, las auras y bendiciones del paladín, los aspectos del cazador, los venenos del pícaro, etc.
+
 ## Instalación
 
 Copiá la carpeta `BarraLibre` a `World of Warcraft\<versión>\Interface\AddOns\` (`_forever_` o `_classic_era_`). Tiene que quedar `...\AddOns\BarraLibre\BarraLibre.toc`.
@@ -40,6 +42,27 @@ Las teclas funcionan en combate. Lo que no se puede en combate (porque el juego 
 | `/barra 2 centrar` | Volver a la posición de inicio. |
 
 Sin número, los comandos son para la barra 1. Si bajás la cantidad de barras, las que sobran se ocultan con su contenido y sus teclas guardados: vuelven si las volvés a activar.
+
+## Barra de clase
+
+Aparece sola, debajo de la barra 1, con un botón por grupo. Solo muestra los grupos de los que ya conocés algo, y siempre usa **el rango más alto que tengas**. Al aprender un hechizo o un rango nuevo, se actualiza.
+
+- **Clic (o su tecla):** usa lo elegido en ese grupo.
+- **Clic derecho:** elegir qué usa ese botón (por ejemplo, qué tótem de tierra). Fuera de combate.
+
+| Clase | Botones |
+|---|---|
+| Chamán | Tótem de Tierra, Fuego, Agua y Aire, y **Todos**: pone los tótems elegidos, uno por pulsación. |
+| Paladín | Aura, Sello, Bendición y Bendición superior. |
+| Cazador | Aspecto, Picadura, Trampa y Mascota (aliviar, llamar, revivir...). |
+| Mago | Armadura, Intelecto, Conjurar (agua, comida, gemas de maná) y Teletransporte (y portales). |
+| Brujo | Demonio, Armadura, Piedra (de salud, de alma...) y Maldición. |
+| Sacerdote | Entereza, Espíritu, Sombras (protección y Resguardo de miedo) y Fuego interno. |
+| Druida | Marca (o Don) de lo Salvaje y Espinas. |
+| Guerrero | Grito y Ira (Sed de sangre, Ira rabiosa). |
+| Pícaro | Veneno para la mano principal y para la secundaria, con los que tengas en las bolsas. |
+
+`/barra clase` la oculta o la muestra. Se configura como las otras con `clase` en vez del número: `/barra clase vertical`, `/barra clase escala 1.2`, `/barra clase tecla 1 F5`, `/barra clase centrar`. En el modo `/barra teclas` también le podés poner teclas pasando el mouse.
 
 ## Mover y bloquear
 

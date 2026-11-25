@@ -2,14 +2,17 @@
 -- usan de vez en cuando, con teclas del teclado. Funciona aunque juegues con
 -- mando (el modo mando del juego o ConsolePort): es independiente de las barras
 -- de acción y de las asignaciones del mando.
--- Hasta 6 barras, cada una horizontal o vertical.
+-- Hasta 6 barras, cada una horizontal o vertical, y una barra de clase (tótems,
+-- auras, aspectos...) que se arma sola con lo que tu personaje conoce.
 -- WoW Classic Era (1.15) y WoW Forever (1.60).
 
 local ADDON_NAME = ...
 local PREFIX = "|cff66ddffBarra Libre:|r "
-local MAX_BARS = 6
+local MAX_BARS = 6       -- barras propias
+local CLASS_BAR = 7      -- la barra de clase va después
+local TOTAL_BARS = 7
 local PER_BAR = 12
-local MAX_BUTTONS = MAX_BARS * PER_BAR
+local MAX_BUTTONS = TOTAL_BARS * PER_BAR
 local BUTTON_SIZE = 36
 local GAP = 4
 local HEARTHSTONE = 6948
@@ -18,7 +21,8 @@ BINDING_HEADER_BARRALIBRE = "Barra Libre"
 BINDING_NAME_BARRALIBRE_TECLAS = "Asignar teclas a la Barra Libre"
 for index = 1, MAX_BUTTONS do
 	local bar, n = math.floor((index - 1) / PER_BAR) + 1, (index - 1) % PER_BAR + 1
-	_G["BINDING_NAME_CLICK BarraLibreBoton" .. index .. ":LeftButton"] = format("Barra %d, botón %d", bar, n)
+	_G["BINDING_NAME_CLICK BarraLibreBoton" .. index .. ":LeftButton"] = bar == CLASS_BAR
+		and format("Barra de clase, botón %d", n) or format("Barra %d, botón %d", bar, n)
 end
 
 -- Dónde aparece cada barra la primera vez.
@@ -29,6 +33,7 @@ local BAR_DEFAULTS = {
 	{ vertical = true, point = "LEFT", x = 60, y = 0 },
 	{ vertical = false, point = "BOTTOM", x = 0, y = 290 },
 	{ vertical = false, point = "BOTTOM", x = 0, y = 335 },
+	{ vertical = false, point = "BOTTOM", x = 0, y = 155 }, -- barra de clase
 }
 
 local DEFAULTS = {
@@ -37,11 +42,13 @@ local DEFAULTS = {
 	bars = {},         -- por barra: count, vertical, lines, scale, point, x, y, hidden
 	slots = {},        -- [botón] = {kind = "item" | "spell" | "macro", id = número, name = nombre de macro}
 	keys = {},         -- [botón] = "SHIFT-1"
+	classBar = true,   -- mostrar la barra de clase
+	classChoice = {},  -- [grupo] = lo elegido en ese grupo (nombre en inglés de la base)
 }
 
 local function BarDefaults(bar)
 	local base = BAR_DEFAULTS[bar]
-	return { count = bar == 1 and 10 or 6, vertical = base.vertical, lines = 1, scale = 1,
+	return { count = (bar == 1 or bar == CLASS_BAR) and 10 or 6, vertical = base.vertical, lines = 1, scale = 1,
 		point = base.point, relativePoint = base.point, x = base.x, y = base.y, hidden = false }
 end
 
@@ -68,6 +75,13 @@ local function SpellTexture(spellId)
 		return C_Spell.GetSpellTexture(spellId)
 	end
 	return GetSpellTexture and GetSpellTexture(spellId)
+end
+
+local function SpellName(spellId)
+	if C_Spell and C_Spell.GetSpellName then
+		return C_Spell.GetSpellName(spellId)
+	end
+	return GetSpellInfo and (GetSpellInfo(spellId))
 end
 
 local function SpellCooldown(spellId)
@@ -103,9 +117,82 @@ local function BarOf(index)
 	return math.floor((index - 1) / PER_BAR) + 1, (index - 1) % PER_BAR + 1
 end
 
+--------------------------------------------------------------------------------
+-- Barra de clase: grupos de hechizos (o venenos) con uno elegido en cada uno
+--------------------------------------------------------------------------------
+
+local classGroups = {} -- [n] = {key, label, options = {{key, id}}, chosen, items, slot, all}
+
+local function SpellKnown(spellId)
+	return (IsPlayerSpell and IsPlayerSpell(spellId)) or (IsSpellKnown and IsSpellKnown(spellId)) or false
+end
+
+--- El rango más alto que conoce el personaje (los rangos vienen de menor a mayor).
+local function BestRank(ids)
+	for i = #ids, 1, -1 do
+		if SpellKnown(ids[i]) then
+			return ids[i]
+		end
+	end
+end
+
+--- El veneno de más nivel que tenés en las bolsas.
+local function BestItem(ids)
+	for i = #ids, 1, -1 do
+		if (GetItemCount(ids[i]) or 0) > 0 then
+			return ids[i]
+		end
+	end
+end
+
+--- Arma la barra de clase con lo que el personaje conoce ahora.
+local function ScanClass()
+	wipe(classGroups)
+	local _, classFile = UnitClass("player")
+	local data = BarraLibreClassSpells and BarraLibreClassSpells[classFile]
+	if not data then
+		return
+	end
+	for n, group in ipairs(data) do
+		local options = {}
+		for _, family in ipairs(group[3]) do
+			local id = group.items and BestItem(family[2]) or BestRank(family[2])
+			if id then
+				options[#options + 1] = { key = family[1], id = id }
+			end
+		end
+		local chosen = options[1]
+		for _, option in ipairs(options) do
+			if option.key == db.classChoice[group[1]] then
+				chosen = option
+			end
+		end
+		classGroups[n] = { key = group[1], label = group[2], options = options, chosen = chosen,
+			items = group.items, slot = group.slot }
+	end
+	-- Chamán: un botón más que pone los tótems elegidos, uno por pulsación.
+	if classFile == "SHAMAN" then
+		local any = false
+		for _, group in ipairs(classGroups) do
+			if group.chosen then any = true end
+		end
+		classGroups[#classGroups + 1] = { key = "todos", label = "Todos los tótems", options = {}, all = true,
+			chosen = any and { key = "todos" } or nil }
+	end
+end
+
+local function ClassGroup(index)
+	local bar, n = BarOf(index)
+	return bar == CLASS_BAR and classGroups[n] or nil
+end
+
 --- ¿El botón está en uso? (su barra está entre las elegidas y él entre los botones de la barra)
 local function IsActive(index)
 	local bar, n = BarOf(index)
+	if bar == CLASS_BAR then
+		local group = classGroups[n]
+		return db.classBar and group ~= nil and group.chosen ~= nil
+	end
 	return bar <= db.numBars and n <= db.bars[bar].count
 end
 
@@ -171,26 +258,73 @@ end
 -- Contenido de los botones
 --------------------------------------------------------------------------------
 
+--- Lo que hay en un botón: lo que pusiste, o lo elegido en su grupo de la barra de clase.
+local function SlotFor(index)
+	local group = ClassGroup(index)
+	if not group then
+		return db.slots[index]
+	end
+	if not group.chosen then
+		return nil
+	end
+	if group.all then
+		-- /castsequence con los tótems elegidos, con su nombre en tu idioma.
+		local names, icon = {}, nil
+		for _, other in ipairs(classGroups) do
+			if other.chosen and not other.all then
+				names[#names + 1] = SpellName(other.chosen.id)
+				icon = icon or SpellTexture(other.chosen.id)
+			end
+		end
+		return { kind = "macrotext", text = "/castsequence reset=combat/12 " .. table.concat(names, ", "),
+			icon = icon, label = "todos" }
+	elseif group.items then
+		return { kind = "poison", id = group.chosen.id, slot = group.slot }
+	end
+	return { kind = "spell", id = group.chosen.id }
+end
+
 local function SlotIcon(slot)
 	if not slot then
 		return nil
 	end
-	if slot.kind == "item" then
+	if slot.kind == "item" or slot.kind == "poison" then
 		return GetItemIcon(slot.id)
 	elseif slot.kind == "spell" then
 		return SpellTexture(slot.id)
 	elseif slot.kind == "macro" then
 		local _, icon = GetMacroInfo(slot.name)
 		return icon
+	elseif slot.kind == "macrotext" then
+		return slot.icon
 	end
 end
 
 --- Lo que hace el botón al usarlo (solo fuera de combate).
 local function ApplyAction(button)
-	local slot = db.slots[button.index]
+	local slot = SlotFor(button.index)
 	button:SetAttribute("item", nil)
 	button:SetAttribute("spell", nil)
 	button:SetAttribute("macro", nil)
+	button:SetAttribute("macrotext", nil)
+	button:SetAttribute("type1", nil)
+	if ClassGroup(button.index) then
+		-- Barra de clase: solo el clic izquierdo (y la tecla) usan el botón; el derecho elige.
+		button:SetAttribute("type", nil)
+		if binding or not slot then
+			return
+		elseif slot.kind == "spell" then
+			button:SetAttribute("type1", "spell")
+			button:SetAttribute("spell", slot.id)
+		elseif slot.kind == "poison" then
+			button:SetAttribute("type1", "macro")
+			button:SetAttribute("macrotext", format("/use item:%d\n/use %d", slot.id, slot.slot))
+		elseif slot.kind == "macrotext" then
+			button:SetAttribute("type1", "macro")
+			button:SetAttribute("macrotext", slot.text)
+		end
+		return
+	end
 	if binding or not slot then
 		button:SetAttribute("type", nil)
 	elseif slot.kind == "item" then
@@ -206,9 +340,9 @@ local function ApplyAction(button)
 end
 
 local function UpdateCooldown(button)
-	local slot = db.slots[button.index]
+	local slot = SlotFor(button.index)
 	local start, duration
-	if slot and slot.kind == "item" then
+	if slot and (slot.kind == "item" or slot.kind == "poison") then
 		start, duration = ItemCooldown(slot.id)
 	elseif slot and slot.kind == "spell" then
 		start, duration = SpellCooldown(slot.id)
@@ -221,14 +355,14 @@ local function UpdateCooldown(button)
 end
 
 local function UpdateButton(button)
-	local slot = db.slots[button.index]
+	local slot = SlotFor(button.index)
 	local icon = SlotIcon(slot)
 	button.icon:SetTexture(icon)
 	button.icon:SetShown(icon ~= nil)
 	button.icon:SetDesaturated(false)
 	button.icon:SetVertexColor(1, 1, 1)
-	button.count:SetText("")
-	if slot and slot.kind == "item" then
+	button.count:SetText(slot and slot.label or "")
+	if slot and (slot.kind == "item" or slot.kind == "poison") then
 		local count = GetItemCount(slot.id) or 0
 		local _, _, _, _, _, _, _, stack = GetItemInfo(slot.id)
 		if count ~= 1 or (stack and stack > 1) then
@@ -313,6 +447,9 @@ end
 
 --- Pone en el botón lo que hay en el cursor; lo que había queda en el cursor.
 local function DropOnButton(button)
+	if ClassGroup(button.index) or BarOf(button.index) == CLASS_BAR then
+		return -- la barra de clase se arma sola
+	end
 	if InCombatLockdown() then
 		Print("no se puede cambiar la barra en combate.")
 		return
@@ -339,9 +476,13 @@ end
 --------------------------------------------------------------------------------
 
 local function ShowTooltip(button)
-	local slot = db.slots[button.index]
+	local slot = SlotFor(button.index)
+	local group = ClassGroup(button.index)
 	GameTooltip:SetOwner(button, "ANCHOR_TOP")
-	if slot and slot.kind == "item" then
+	if group and group.all then
+		GameTooltip:AddLine("Todos los tótems elegidos", 1, 1, 1)
+		GameTooltip:AddLine("Cada pulsación pone el siguiente.", 0.8, 0.8, 0.8)
+	elseif slot and (slot.kind == "item" or slot.kind == "poison") then
 		GameTooltip:SetItemByID(slot.id)
 	elseif slot and slot.kind == "spell" then
 		GameTooltip:SetSpellByID(slot.id)
@@ -353,13 +494,119 @@ local function ShowTooltip(button)
 	end
 	local bar, n = BarOf(button.index)
 	local key = KeyFor(button.index)
-	GameTooltip:AddLine(format("Barra %d, botón %d. %s", bar, n,
-		key and ("Tecla: " .. key) or "Sin tecla: /barra teclas"), 0.4, 0.8, 1)
-	if slot then
+	local place = bar == CLASS_BAR and format("Barra de clase, botón %d", n) or format("Barra %d, botón %d", bar, n)
+	GameTooltip:AddLine(format("%s. %s", place, key and ("Tecla: " .. key) or "Sin tecla: /barra teclas"), 0.4, 0.8, 1)
+	if group then
+		if not group.all then
+			GameTooltip:AddLine("Clic derecho: elegir " .. group.label:lower(), 0.6, 0.6, 0.6)
+		end
+	elseif slot then
 		GameTooltip:AddLine(db.locked and "Mayús+arrastrar: sacarlo de la barra" or "Arrastrar: sacarlo de la barra",
 			0.6, 0.6, 0.6)
 	end
 	GameTooltip:Show()
+end
+
+--------------------------------------------------------------------------------
+-- Selector de la barra de clase (clic derecho)
+--------------------------------------------------------------------------------
+
+local picker
+
+local function RefreshClassButtons()
+	if InCombatLockdown() then
+		pendingSetup = true
+		return
+	end
+	for n = 1, PER_BAR do
+		local button = buttons[IndexOf(CLASS_BAR, n)]
+		ApplyAction(button)
+		UpdateButton(button)
+	end
+end
+
+local function CreatePicker()
+	picker = CreateFrame("Frame", "BarraLibreSelector", UIParent)
+	picker:SetFrameStrata("DIALOG")
+	picker:SetClampedToScreen(true)
+	local background = picker:CreateTexture(nil, "BACKGROUND")
+	background:SetAllPoints()
+	background:SetColorTexture(0, 0, 0, 0.75)
+	picker.title = picker:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+	picker.title:SetPoint("TOPLEFT", 6, -5)
+	picker.options = {}
+	for i = 1, PER_BAR do
+		local option = CreateFrame("Button", nil, picker)
+		option:SetSize(BUTTON_SIZE, BUTTON_SIZE)
+		option:SetPoint("TOPLEFT", 6 + (i - 1) * (BUTTON_SIZE + GAP), -20)
+		option.icon = option:CreateTexture(nil, "ARTWORK")
+		option.icon:SetAllPoints()
+		option.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+		option.mark = option:CreateTexture(nil, "OVERLAY")
+		option.mark:SetPoint("TOPLEFT", -2, 2)
+		option:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
+		option.mark:SetPoint("BOTTOMRIGHT", 2, -2)
+		option.mark:SetColorTexture(1, 0.82, 0, 0.35)
+		option:SetScript("OnClick", function(self)
+			local group = picker.group
+			db.classChoice[group.key] = self.option.key
+			group.chosen = self.option
+			picker:Hide()
+			-- El botón de "todos" del chamán cambia con cada tótem elegido.
+			RefreshClassButtons()
+		end)
+		option:SetScript("OnEnter", function(self)
+			GameTooltip:SetOwner(self, "ANCHOR_TOP")
+			if picker.group.items then
+				GameTooltip:SetItemByID(self.option.id)
+			else
+				GameTooltip:SetSpellByID(self.option.id)
+			end
+			GameTooltip:Show()
+		end)
+		option:SetScript("OnLeave", function() GameTooltip:Hide() end)
+		picker.options[i] = option
+	end
+	picker:Hide()
+	tinsert(UISpecialFrames, "BarraLibreSelector") -- se cierra con Esc
+end
+
+local function OpenPicker(button)
+	local group = ClassGroup(button.index)
+	if not group or group.all or #group.options == 0 then
+		return
+	end
+	if InCombatLockdown() then
+		Print("se elige fuera de combate.")
+		return
+	end
+	if picker:IsShown() and picker.group == group then
+		picker:Hide()
+		return
+	end
+	picker.group = group
+	picker.title:SetText(group.label)
+	for i, option in ipairs(picker.options) do
+		local data = group.options[i]
+		if data then
+			option.option = data
+			option.icon:SetTexture(group.items and GetItemIcon(data.id) or SpellTexture(data.id))
+			option.mark:SetShown(group.chosen == data)
+			option:Show()
+		else
+			option:Hide()
+		end
+	end
+	local count = #group.options
+	picker:SetSize(12 + count * (BUTTON_SIZE + GAP) - GAP, BUTTON_SIZE + 26)
+	picker:SetScale(db.bars[CLASS_BAR].scale)
+	picker:ClearAllPoints()
+	if db.bars[CLASS_BAR].vertical then
+		picker:SetPoint("LEFT", button, "RIGHT", 6, 0)
+	else
+		picker:SetPoint("BOTTOM", button, "TOP", 0, 6)
+	end
+	picker:Show()
 end
 
 local function CreateButton(index)
@@ -410,12 +657,19 @@ local function CreateButton(index)
 
 	-- Clic con algo en el cursor: se pone en el botón en vez de usarlo.
 	button:SetScript("PreClick", function(self)
+		if BarOf(self.index) == CLASS_BAR then
+			return
+		end
 		if GetCursorInfo() and not InCombatLockdown() then
 			self:SetAttribute("type", nil)
 			self.dropping = true
 		end
 	end)
-	button:SetScript("PostClick", function(self, _, down)
+	button:SetScript("PostClick", function(self, mouseButton, down)
+		if mouseButton == "RightButton" and not down and BarOf(self.index) == CLASS_BAR and not binding then
+			OpenPicker(self)
+			return
+		end
 		if self.dropping and not down then
 			self.dropping = nil
 			DropOnButton(self)
@@ -424,6 +678,9 @@ local function CreateButton(index)
 	end)
 	button:SetScript("OnReceiveDrag", DropOnButton)
 	button:SetScript("OnDragStart", function(self)
+		if BarOf(self.index) == CLASS_BAR then
+			return
+		end
 		local slot = db.slots[self.index]
 		if not slot or binding or InCombatLockdown() then
 			return
@@ -459,6 +716,16 @@ local function LayoutBar(bar)
 	local settings = db.bars[bar]
 	local frame, grip = bars[bar], grips[bar]
 	local count = settings.count
+	-- Barra de clase: van seguidos solo los grupos que el personaje conoce.
+	local order = {}
+	for n = 1, PER_BAR do
+		if bar ~= CLASS_BAR or IsActive(IndexOf(bar, n)) then
+			order[#order + 1] = n
+		end
+	end
+	if bar == CLASS_BAR then
+		count = math.max(1, #order)
+	end
 	-- "lines": filas de una barra horizontal, o columnas de una vertical.
 	local lines = math.max(1, math.min(settings.lines, count))
 	local perLine = math.ceil(count / lines)
@@ -473,11 +740,16 @@ local function LayoutBar(bar)
 	frame:ClearAllPoints()
 	frame:SetPoint(settings.point, UIParent, settings.relativePoint, settings.x, settings.y)
 
+	local position = {}
+	for place, n in ipairs(order) do
+		position[n] = place
+	end
 	for n = 1, PER_BAR do
 		local button = buttons[IndexOf(bar, n)]
 		button:ClearAllPoints()
-		if n <= count then
-			local along, across = (n - 1) % perLine, math.floor((n - 1) / perLine)
+		local place = position[n]
+		if place and place <= count then
+			local along, across = (place - 1) % perLine, math.floor((place - 1) / perLine)
 			if settings.vertical then
 				button:SetPoint("TOPLEFT", frame, "TOPLEFT", across * step, -along * step)
 			else
@@ -500,7 +772,13 @@ local function LayoutBar(bar)
 	end
 	grip:SetShown(not db.locked)
 
-	if bar <= db.numBars and not settings.hidden then
+	local inUse
+	if bar == CLASS_BAR then
+		inUse = db.classBar and #order > 0
+	else
+		inUse = bar <= db.numBars
+	end
+	if inUse and not settings.hidden then
 		frame:Show()
 	else
 		frame:Hide()
@@ -512,7 +790,7 @@ local function Layout()
 		pendingSetup = true
 		return
 	end
-	for bar = 1, MAX_BARS do
+	for bar = 1, TOTAL_BARS do
 		LayoutBar(bar)
 	end
 end
@@ -530,7 +808,7 @@ local function CreateGrip(bar)
 	texture:SetColorTexture(0.4, 0.8, 1, 0.35)
 	local label = grip:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 	label:SetPoint("CENTER")
-	label:SetText(bar)
+	label:SetText(bar == CLASS_BAR and "C" or bar)
 	grip:RegisterForDrag("LeftButton")
 	grip:RegisterForClicks("RightButtonUp")
 	grip:SetScript("OnDragStart", function()
@@ -553,7 +831,8 @@ local function CreateGrip(bar)
 	end)
 	grip:SetScript("OnEnter", function(self)
 		GameTooltip:SetOwner(self, "ANCHOR_LEFT")
-		GameTooltip:AddLine(format("Barra Libre %d (%s)", bar, db.bars[bar].vertical and "vertical" or "horizontal"))
+		GameTooltip:AddLine(format("%s (%s)", bar == CLASS_BAR and "Barra de clase" or ("Barra Libre " .. bar),
+			db.bars[bar].vertical and "vertical" or "horizontal"))
 		GameTooltip:AddLine("Arrastrar: mover la barra.", 1, 1, 1)
 		GameTooltip:AddLine("Clic derecho: horizontal o vertical.", 1, 1, 1)
 		GameTooltip:AddLine("/barra bloquear fija las barras y oculta esto.", 0.7, 0.7, 0.7)
@@ -564,7 +843,7 @@ local function CreateGrip(bar)
 end
 
 local function CreateBars()
-	for bar = 1, MAX_BARS do
+	for bar = 1, TOTAL_BARS do
 		local frame = CreateFrame("Frame", "BarraLibreBarra" .. bar, UIParent)
 		frame:SetMovable(true)
 		frame:SetClampedToScreen(true)
@@ -573,9 +852,10 @@ local function CreateBars()
 	for index = 1, MAX_BUTTONS do
 		buttons[index] = CreateButton(index)
 	end
-	for bar = 1, MAX_BARS do
+	for bar = 1, TOTAL_BARS do
 		grips[bar] = CreateGrip(bar)
 	end
+	CreatePicker()
 end
 
 --------------------------------------------------------------------------------
@@ -775,6 +1055,9 @@ local function PrintHelp()
 		"/barra [barra] poner <botón> <objeto>  -  nombre del objeto o Mayús+clic en él",
 		"/barra [barra] quitar <botón | todo>  -  vaciar",
 		"/barra bloquear  -  fijar las barras (para sacar algo: Mayús+arrastrar)",
+		"/barra clase  -  mostrar u ocultar la barra de clase (tótems, auras, aspectos...)",
+		"/barra clase vertical | escala 1.2 | tecla 1 F5 | centrar  -  lo mismo que las otras barras",
+		"En la barra de clase: clic derecho en un botón para elegir qué usa.",
 	}
 	for _, line in ipairs(lines) do
 		DEFAULT_CHAT_FRAME:AddMessage("  " .. line)
@@ -800,15 +1083,32 @@ end
 
 local function HandleSlash(input)
 	local raw = strtrim(input or "")
-	-- Un número al principio elige la barra: "/barra 2 vertical".
-	local barText, afterBar = raw:match("^(%d+)%s+(.+)$")
+	-- Un número al principio elige la barra: "/barra 2 vertical". "clase" es la barra de clase.
 	local bar = 1
-	if barText then
-		bar = tonumber(barText)
-		raw = afterBar
-		if bar < 1 or bar > MAX_BARS then
-			Print(format("las barras van de 1 a %d.", MAX_BARS))
+	local classText, afterClass = raw:match("^([Cc][Ll][Aa][Ss][Ee])%s*(.*)$")
+	if classText then
+		bar = CLASS_BAR
+		raw = afterClass
+		if raw == "" then
+			if NotInCombat() then
+				db.classBar = not db.classBar
+				Layout()
+				ApplyBindings()
+				Print(db.classBar and "barra de clase visible." or "barra de clase oculta. /barra clase para verla.")
+			end
 			return
+		end
+	else
+		local barText, afterBar = raw:match("^(%d+)%s+(.+)$")
+		if barText then
+			bar = tonumber(barText)
+			raw = afterBar
+			if bar == CLASS_BAR then
+				bar = CLASS_BAR
+			elseif bar < 1 or bar > MAX_BARS then
+				Print(format("las barras van de 1 a %d (la de clase: /barra clase).", MAX_BARS))
+				return
+			end
 		end
 	end
 	local settings = db.bars[bar]
@@ -817,11 +1117,17 @@ local function HandleSlash(input)
 	local number = tonumber(rest)
 
 	local keyButton, keyName = rest:match("^(%d+)%s+(%S+)$")
+	if bar == CLASS_BAR and (command == "botones" or command == "poner" or command == "quitar"
+		or command == "vaciar" or command == "limpiar") then
+		Print("la barra de clase se arma sola con lo que conoce tu personaje. Clic derecho en un botón para elegir.")
+		return
+	end
 	if (command == "tecla" or command == "teclas") and keyButton then
 		-- Sin mouse (por ejemplo, con el mando): /barra tecla 3 SHIFT-1
 		keyButton = tonumber(keyButton)
-		if keyButton < 1 or keyButton > settings.count then
-			Print(format("la barra %d tiene botones del 1 al %d.", bar, settings.count))
+		local limit = bar == CLASS_BAR and #classGroups or settings.count
+		if keyButton < 1 or keyButton > limit then
+			Print(format("la barra %s tiene botones del 1 al %d.", bar == CLASS_BAR and "de clase" or bar, limit))
 		elseif not NotInCombat() then
 			return
 		elseif keyName:lower() == "borrar" or keyName:lower() == "ninguna" then
@@ -957,7 +1263,7 @@ local function InitDB()
 	BarraLibreDB = BarraLibreDB or {}
 	db = BarraLibreDB
 	CopyDefaults(db, DEFAULTS)
-	for bar = 1, MAX_BARS do
+	for bar = 1, TOTAL_BARS do
 		db.bars[bar] = db.bars[bar] or {}
 		CopyDefaults(db.bars[bar], BarDefaults(bar))
 	end
@@ -970,7 +1276,8 @@ events:RegisterEvent("PLAYER_LOGIN")
 events:RegisterEvent("PLAYER_REGEN_ENABLED")
 events:RegisterEvent("PLAYER_REGEN_DISABLED")
 for _, event in ipairs({ "BAG_UPDATE_DELAYED", "BAG_UPDATE_COOLDOWN", "SPELL_UPDATE_COOLDOWN", "UPDATE_BINDINGS",
-	"GET_ITEM_INFO_RECEIVED", "UPDATE_MACROS", "PLAYER_ENTERING_WORLD", "SPELL_UPDATE_USABLE" }) do
+	"GET_ITEM_INFO_RECEIVED", "UPDATE_MACROS", "PLAYER_ENTERING_WORLD", "SPELL_UPDATE_USABLE", "SPELLS_CHANGED",
+	"LEARNED_SPELL_IN_TAB" }) do
 	pcall(events.RegisterEvent, events, event)
 end
 
@@ -997,12 +1304,22 @@ events:SetScript("OnEvent", function(_, event, arg1)
 		Layout()
 		SetupButtons()
 	elseif event == "PLAYER_LOGIN" then
+		ScanClass()
+		Layout()
 		SetupButtons()
 		if not next(db.slots) then
 			Print("arrastrá pociones u objetos a la barra, o escribí /barra auto. /barra teclas para elegir las teclas,"
 				.. " /barra barras <n> para tener más barras.")
 		end
+	elseif event == "SPELLS_CHANGED" or event == "LEARNED_SPELL_IN_TAB" then
+		-- Aprendiste algo (o un rango nuevo): la barra de clase se rearma.
+		ScanClass()
+		Layout()
+		SetupButtons()
 	elseif event == "PLAYER_REGEN_DISABLED" then
+		if picker:IsShown() then
+			picker:Hide()
+		end
 		if binding then
 			-- El juego no deja asignar teclas en combate: se guarda lo hecho.
 			StopBinding()
@@ -1010,6 +1327,17 @@ events:SetScript("OnEvent", function(_, event, arg1)
 	elseif event == "PLAYER_REGEN_ENABLED" then
 		if pendingSetup then
 			pendingSetup = false
+			ScanClass()
+			Layout()
+			SetupButtons()
+		end
+	elseif event == "BAG_UPDATE_DELAYED" and select(2, UnitClass("player")) == "ROGUE" then
+		-- Venenos: lo que hay en las bolsas cambia la barra de clase.
+		ScanClass()
+		if InCombatLockdown() then
+			pendingSetup = true
+			QueueRefresh()
+		else
 			Layout()
 			SetupButtons()
 		end
