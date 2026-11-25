@@ -103,6 +103,10 @@ local binder, bindHint
 local pendingSetup = false -- algo cambió en combate: se aplica al salir
 local binding = false      -- modo asignar teclas
 local hovered              -- botón bajo el mouse en el modo asignar teclas
+local mouseOver            -- botón bajo el mouse
+local PrepareDrop          -- más abajo
+local moving               -- barra que se está moviendo con la agarradera
+local StopMoving           -- más abajo
 
 local function Print(message)
 	DEFAULT_CHAT_FRAME:AddMessage(PREFIX .. message)
@@ -512,7 +516,8 @@ local function SetupButtons()
 end
 
 --- Pone en el botón lo que hay en el cursor; lo que había queda en el cursor.
-local function DropOnButton(button)
+--- Con duringClick, la acción se activa recién al cuadro siguiente: el clic que la puso no la usa.
+local function DropOnButton(button, duringClick)
 	if BarOf(button.index) == CLASS_BAR then
 		return -- la barra de clase se arma sola
 	end
@@ -530,10 +535,36 @@ local function DropOnButton(button)
 	local old = db.slots[button.index]
 	ClearCursor()
 	db.slots[button.index] = slot
-	ApplyAction(button)
+	if duringClick then
+		C_Timer.After(0, function()
+			if not InCombatLockdown() and not (mouseOver == button and GetCursorInfo()) then
+				button.dropTarget = nil
+				ApplyAction(button)
+			end
+		end)
+	else
+		ApplyAction(button)
+	end
 	UpdateButton(button)
 	if old then
 		Pickup(old)
+	end
+end
+
+--- Con algo en el cursor y el mouse sobre un botón propio, fuera de combate: el clic lo pone,
+--- no usa lo que había.
+PrepareDrop = function(button)
+	if BarOf(button.index) == CLASS_BAR or binding or InCombatLockdown() then
+		return
+	end
+	if GetCursorInfo() then
+		if not button.dropTarget then
+			button.dropTarget = true
+			button:SetAttribute("type", nil)
+		end
+	elseif button.dropTarget then
+		button.dropTarget = nil
+		ApplyAction(button)
 	end
 end
 
@@ -638,8 +669,18 @@ local function CreatePicker()
 		option:SetScript("OnLeave", function() GameTooltip:Hide() end)
 		picker.options[i] = option
 	end
+	-- Se cierra solo si el mouse se va un rato (no se suma a la lista de ventanas de Esc del juego).
+	picker:SetScript("OnUpdate", function(self, elapsed)
+		if self:IsMouseOver() or (self.owner and self.owner:IsMouseOver()) then
+			self.away = 0
+		else
+			self.away = (self.away or 0) + (elapsed or 0)
+			if self.away > 1.5 then
+				self:Hide()
+			end
+		end
+	end)
 	picker:Hide()
-	tinsert(UISpecialFrames, "BarraLibreSelector") -- se cierra con Esc
 end
 
 local function OpenPicker(button)
@@ -656,6 +697,8 @@ local function OpenPicker(button)
 		return
 	end
 	picker.group = group
+	picker.owner = button
+	picker.away = 0
 	picker.title:SetText(group.label)
 	for i, option in ipairs(picker.options) do
 		local data = group.options[i]
@@ -732,28 +775,22 @@ local function CreateButton(index)
 	button.bindGlow:SetColorTexture(0.2, 1, 0.4, 0.25)
 	button.bindGlow:Hide()
 
-	-- Clic con algo en el cursor: se pone en el botón en vez de usarlo.
-	button:SetScript("PreClick", function(self)
-		if BarOf(self.index) == CLASS_BAR then
+	-- Al apretar la tecla o hacer clic no corre nada del addon: solo la acción protegida del juego.
+	-- Para poner algo con un clic (con un objeto en el cursor), el botón se desactiva mientras el
+	-- mouse está encima con algo en el cursor, y se pone al soltar el botón del mouse.
+	button:SetScript("OnMouseUp", function(self, mouseButton)
+		if binding then
 			return
 		end
-		if GetCursorInfo() and not InCombatLockdown() then
-			self:SetAttribute("type", nil)
-			self.dropping = true
-		end
-	end)
-	button:SetScript("PostClick", function(self, mouseButton, down)
-		if mouseButton == "RightButton" and not down and BarOf(self.index) == CLASS_BAR and not binding then
+		if mouseButton == "RightButton" and BarOf(self.index) == CLASS_BAR then
 			OpenPicker(self)
-			return
-		end
-		if self.dropping and not down then
-			self.dropping = nil
-			DropOnButton(self)
-			ApplyAction(self)
+		elseif mouseButton == "LeftButton" and self.dropTarget and GetCursorInfo() then
+			DropOnButton(self, true)
 		end
 	end)
-	button:SetScript("OnReceiveDrag", DropOnButton)
+	button:SetScript("OnReceiveDrag", function(self)
+		DropOnButton(self)
+	end)
 	button:SetScript("OnDragStart", function(self)
 		if BarOf(self.index) == CLASS_BAR then
 			return
@@ -771,14 +808,25 @@ local function CreateButton(index)
 		Pickup(slot)
 	end)
 	button:SetScript("OnEnter", function(self)
+		mouseOver = self
 		if binding then
 			hovered = self.index
 		end
+		PrepareDrop(self)
 		ShowTooltip(self)
 	end)
 	button:SetScript("OnLeave", function(self)
+		if mouseOver == self then
+			mouseOver = nil
+		end
 		if hovered == self.index then
 			hovered = nil
+		end
+		if self.dropTarget then
+			self.dropTarget = nil
+			if not InCombatLockdown() then
+				ApplyAction(self)
+			end
 		end
 		GameTooltip:Hide()
 	end)
@@ -885,6 +933,23 @@ local function SetOrientation(bar, vertical)
 	Layout()
 end
 
+--- Termina de mover una barra y guarda dónde quedó (solo fuera de combate).
+StopMoving = function()
+	local frame = moving
+	if not frame or InCombatLockdown() then
+		return
+	end
+	moving = nil
+	frame:StopMovingOrSizing()
+	for bar, other in ipairs(bars) do
+		if other == frame then
+			local settings = db.bars[bar]
+			local point, _, relativePoint, x, y = frame:GetPoint()
+			settings.point, settings.relativePoint, settings.x, settings.y = point, relativePoint, x, y
+		end
+	end
+end
+
 local function CreateGrip(bar)
 	local frame = bars[bar]
 	local grip = CreateFrame("Button", "BarraLibreAgarradera" .. bar, frame)
@@ -899,13 +964,13 @@ local function CreateGrip(bar)
 	grip:SetScript("OnDragStart", function()
 		if not InCombatLockdown() then
 			frame:StartMoving()
+			moving = frame
 		end
 	end)
 	grip:SetScript("OnDragStop", function()
-		frame:StopMovingOrSizing()
-		local settings = db.bars[bar]
-		local point, _, relativePoint, x, y = frame:GetPoint()
-		settings.point, settings.relativePoint, settings.x, settings.y = point, relativePoint, x, y
+		if moving == frame then
+			StopMoving()
+		end
 	end)
 	grip:SetScript("OnClick", function()
 		if InCombatLockdown() then
@@ -1361,7 +1426,9 @@ events:RegisterEvent("ADDON_LOADED")
 events:RegisterEvent("PLAYER_LOGIN")
 events:RegisterEvent("PLAYER_REGEN_ENABLED")
 events:RegisterEvent("PLAYER_REGEN_DISABLED")
-for _, event in ipairs({ "BAG_UPDATE_DELAYED", "BAG_UPDATE_COOLDOWN", "SPELL_UPDATE_COOLDOWN", "UPDATE_BINDINGS",
+events:RegisterEvent("ADDON_ACTION_BLOCKED")
+events:RegisterEvent("ADDON_ACTION_FORBIDDEN")
+for _, event in ipairs({ "CURSOR_CHANGED", "CURSOR_UPDATE", "BAG_UPDATE_DELAYED", "BAG_UPDATE_COOLDOWN", "SPELL_UPDATE_COOLDOWN", "UPDATE_BINDINGS",
 	"GET_ITEM_INFO_RECEIVED", "UPDATE_MACROS", "PLAYER_ENTERING_WORLD", "SPELL_UPDATE_USABLE", "SPELLS_CHANGED",
 	"LEARNED_SPELL_IN_TAB", "PET_BAR_UPDATE", "PET_BAR_UPDATE_COOLDOWN", "PET_BAR_UPDATE_USABLE", "PET_UI_UPDATE",
 	"UNIT_PET", "PLAYER_CONTROL_LOST", "PLAYER_CONTROL_GAINED", "UPDATE_SHAPESHIFT_FORMS", "UPDATE_SHAPESHIFT_FORM",
@@ -1381,7 +1448,9 @@ local function QueueRefresh()
 	end)
 end
 
-events:SetScript("OnEvent", function(_, event, arg1)
+local blockedSeen
+
+events:SetScript("OnEvent", function(_, event, arg1, ...)
 	if event == "ADDON_LOADED" then
 		if arg1 ~= ADDON_NAME then
 			return
@@ -1421,7 +1490,25 @@ events:SetScript("OnEvent", function(_, event, arg1)
 			Layout()
 			SetupButtons()
 		end
+	elseif event == "ADDON_ACTION_BLOCKED" or event == "ADDON_ACTION_FORBIDDEN" then
+		-- Si el juego frena algo de este addon, decir exactamente qué (una vez por cada cosa).
+		local addon, what = arg1, ...  -- el addon y la función que se frenó
+		if addon == ADDON_NAME then
+			blockedSeen = blockedSeen or {}
+			what = tostring(what)
+			if not blockedSeen[what] then
+				blockedSeen[what] = true
+				Print(format("el juego frenó \"%s\"%s. Si vuelve a pasar, mandale este mensaje a quien te pasó el addon.",
+					what, InCombatLockdown() and " en combate" or ""))
+			end
+		end
+	elseif event == "CURSOR_CHANGED" or event == "CURSOR_UPDATE" then
+		if mouseOver then
+			PrepareDrop(mouseOver)
+		end
 	elseif event == "PLAYER_REGEN_DISABLED" then
+		-- Justo antes del combate: soltar una barra que se esté moviendo y cerrar el selector.
+		StopMoving()
 		if picker:IsShown() then
 			picker:Hide()
 		end

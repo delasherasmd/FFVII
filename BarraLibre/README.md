@@ -64,3 +64,9 @@ Es la barra especial que trae cada clase. Aparece sola, debajo de la barra 1. Se
 Cada barra tiene una **agarradera** celeste con su número (a la izquierda si es horizontal, arriba si es vertical): arrastrala para mover la barra. `/barra bloquear` fija todas las barras y oculta las agarraderas; vuelve a desbloquear con el mismo comando.
 
 `/barra` solo muestra la ayuda.
+
+## Si aparece "bloqueado de una acción" o "Interface action failed"
+
+Al usar los botones (con tecla o clic) no corre nada del addon: solo la acción del juego. Aun así, si el juego frena algo, el chat dice exactamente qué fue ("el juego frenó ..."): mandá ese mensaje para corregirlo.
+
+Con **ConsolePort**: en combate, usá las teclas de la barra y no el cursor de interfaz del mando para hacer clic en los botones (el cursor no puede hacer clic en botones protegidos durante el combate).
